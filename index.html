@@ -459,7 +459,7 @@ function App(){
     document.getElementById("themeColor").content=dk?"#07090f":"#f0ede8";
     localStorage.setItem("pk_theme",theme);
   },[theme]);
-  ef(function(){localStorage.setItem("pk_lang",lang)},[lang]);
+  ef(function(){localStorage.setItem("pk_lang",lang);document.documentElement.lang=lang;},[lang]);
   ef(function(){localStorage.setItem("pk_cur",curId)},[curId]);
   ef(function(){sv(S)},[S]);
 
