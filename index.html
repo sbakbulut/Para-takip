@@ -335,6 +335,7 @@ tr:{
   amount_ph:"Tutar",note_ph:"Not",save:"✓ Kaydet",cancel:"İptal",
   total_debt:"Toplam Borç",new_btn:"+ Yeni",debt_name:"Borç adı",total_amount:"Toplam tutar",
   edit_btn:"Düzenle",delete_btn:"Sil",paid_lbl:"Ödenen",remaining_lbl:"Kalan",
+  debt_name_ph:"Borç adı",debt_set_total:"Toplam:",debt_add_amt:"Ekle:",reset_paid_btn:"Ödemeyi Sıfırla",
   make_payment:"Ödeme Yap",pay_btn:"💳 Öde",payment_history:"Ödeme Geçmişi",
   income_mgmt:"Gelir Yönetimi",add_income:"+ Ekle",not_entered:"Girilmedi",
   note_opt:"Not (opsiyonel)",income_history:"Gelir Geçmişi",this_month:"(bu ay)",
@@ -390,6 +391,7 @@ en:{
   amount_ph:"Amount",note_ph:"Note",save:"✓ Save",cancel:"Cancel",
   total_debt:"Total Debt",new_btn:"+ New",debt_name:"Debt name",total_amount:"Total amount",
   edit_btn:"Edit",delete_btn:"Delete",paid_lbl:"Paid",remaining_lbl:"Remaining",
+  debt_name_ph:"Debt name",debt_set_total:"Total:",debt_add_amt:"Add:",reset_paid_btn:"Reset Paid",
   make_payment:"Make Payment",pay_btn:"💳 Pay",payment_history:"Payment History",
   income_mgmt:"Income Management",add_income:"+ Add",not_entered:"Not entered",
   note_opt:"Note (optional)",income_history:"Income History",this_month:"(this month)",
@@ -463,6 +465,8 @@ function App(){
   var _aD=h("kart"),aD=_aD[0],setAD=_aD[1];
   var _eDI=h(null),eDI=_eDI[0],setEDI=_eDI[1];
   var _dTI=h(""),dTI=_dTI[0],setDTI=_dTI[1];
+  var _dLI=h(""),dLI=_dLI[0],setDLI=_dLI[1];
+  var _dAI=h(""),dAI=_dAI[0],setDAI=_dAI[1];
   var _adM=h(false),adM=_adM[0],setAdM=_adM[1];
   var _nDL=h(""),nDL=_nDL[0],setNDL=_nDL[1];
   var _nDT=h(""),nDT=_nDT[0],setNDT=_nDT[1];
@@ -625,7 +629,10 @@ function App(){
   function addIncEntry(){var v=parseFloat(iAmt.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{incomeEntries:(p.incomeEntries||[]).concat([{id:"ie_"+Date.now(),monthKey:incMK,amount:v,category:iCat,note:iNote}])})});setShowIF(false);setIAmt("");setINote("")}
   function delIncEntry(id){setS(function(p){return Object.assign({},p,{incomeEntries:(p.incomeEntries||[]).filter(function(e){return e.id!==id})})})}
   function payDt(did){var a=parseFloat(dpA.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;return Object.assign({},d,{paid:d.paid+a,payments:(d.payments||[]).concat([{id:Date.now(),amount:a,date:tdy()}])})})})});setDpA("")}
-  function updDT(did){var v=parseFloat(dTI.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:v}):d})})});setEDI(null);setDTI("")}
+  function updDT(did){var v=parseFloat(dTI.replace(",","."));if(isNaN(v)||v<0)return;var lbl=dLI.trim();setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;var upd=Object.assign({},d,{total:v});if(lbl)upd.label=lbl;return upd})})});setEDI(null);setDTI("");setDLI("")}
+  function addToDbt(did){var v=parseFloat(dAI.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:d.total+v}):d})})});setDAI("")}
+  function resetPaid(did){setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{paid:0,payments:[]}):d})})})}
+  function removeBud(cid){var bu=Object.assign({},S.budgets);delete bu[cid];setS(function(p){return Object.assign({},p,{budgets:bu})});setBE(null);setBI("")}
   function addDbt(){if(!nDL.trim())return;var v=parseFloat(nDT.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.concat([{id:"d_"+Date.now(),label:nDL.trim(),icon:"📄",total:v,paid:0,payments:[]}])})});setAdM(false);setNDL("");setNDT("")}
   function delDbt(did){if(!confirm(t("delete_confirm")))return;setS(function(p){return Object.assign({},p,{debts:p.debts.filter(function(d){return d.id!==did})})});if(aD===did)setAD((S.debts.find(function(d){return d.id!==did})||{}).id||"")}
   function svBud(cid){var v=parseFloat(bI.replace(",","."));if(!v||v<=0)return;var bu=Object.assign({},S.budgets);bu[cid]=v;setS(function(p){return Object.assign({},p,{budgets:bu})});setBE(null);setBI("")}
@@ -955,13 +962,23 @@ function App(){
         <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style=${{fontSize:17,fontWeight:700}}>${adO.icon+" "+adO.label}</span>
           <div style=${{display:"flex",gap:6}}>
-            <button onClick=${function(){setEDI(adO.id);setDTI(String(adO.total))}} style=${{padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${t("edit_btn")}</button>
+            <button onClick=${function(){if(eDI===adO.id){setEDI(null);setDTI("");setDLI("");setDAI("")}else{setEDI(adO.id);setDTI(String(adO.total));setDLI(adO.label);setDAI("")}}} style=${{padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${eDI===adO.id?"✕":t("edit_btn")}</button>
             ${S.debts.length>1&&html`<button onClick=${function(){delDbt(adO.id)}} style=${{padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.08)",color:"var(--red)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${t("delete_btn")}</button>`}
           </div>
         </div>
-        ${eDI===adO.id?html`<div style=${{display:"flex",gap:8}}>
-          <input class="inp-field" type="text" inputMode="decimal" value=${dTI} onInput=${function(e){setDTI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:16,fontWeight:700}}/>
-          <button onClick=${function(){updDT(adO.id)}} style=${{padding:"11px 16px",borderRadius:"var(--radius-xs)",background:"var(--blue)",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",border:"none"}}>${t("save_btn")}</button>
+        ${eDI===adO.id?html`<div style=${{display:"flex",flexDirection:"column",gap:6,marginBottom:6}}>
+          <input class="inp-field" type="text" placeholder=${t("debt_name_ph")} value=${dLI} onInput=${function(e){setDLI(e.target.value)}} style=${{fontWeight:600}}/>
+          <div style=${{display:"flex",gap:6,alignItems:"center"}}>
+            <span style=${{fontSize:11,color:"var(--sub)",whiteSpace:"nowrap"}}>${t("debt_set_total")}</span>
+            <input class="inp-field" type="text" inputMode="decimal" value=${dTI} onInput=${function(e){setDTI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:14,fontWeight:700}}/>
+            <button onClick=${function(){updDT(adO.id)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",background:"var(--blue)",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>${t("save_btn")}</button>
+          </div>
+          <div style=${{display:"flex",gap:6,alignItems:"center"}}>
+            <span style=${{fontSize:11,color:"var(--sub)",whiteSpace:"nowrap"}}>${t("debt_add_amt")}</span>
+            <input class="inp-field" type="text" inputMode="decimal" value=${dAI} onInput=${function(e){setDAI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:14,fontWeight:700}}/>
+            <button onClick=${function(){addToDbt(adO.id)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",background:"var(--green)",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>+</button>
+          </div>
+          <button onClick=${function(){if(confirm(t("delete_confirm")))resetPaid(adO.id)}} style=${{alignSelf:"flex-start",padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.08)",color:"var(--red)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${t("reset_paid_btn")}</button>
         </div>`:html`<p class="num num-lg" style=${{color:"var(--txt)"}}>${f(adO.total)}</p>`}
         ${adO.total>0&&function(){var p=Math.min(100,(adO.paid/adO.total)*100);return html`<div>
           <div style=${{height:22,background:"var(--card2)",borderRadius:11,overflow:"hidden",border:"1px solid var(--border)"}}>
@@ -1157,11 +1174,12 @@ function App(){
         <span style=${{fontSize:18}}>${c.icon}</span>
         <span style=${{flex:1,fontSize:13,fontWeight:600}}>${c.label}</span>
         <span class="num" style=${{fontSize:11,color:ov?"var(--red)":"var(--sub)"}}>${f(sp)+(b>0?" / "+f(b):"")}</span>
-        <button onClick=${function(){setBE(c.id);setBI(String(b||""))}} style=${{padding:"4px 9px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${b>0?"✏️":t("limit_btn")}</button>
+        <button onClick=${function(){if(bE===c.id){setBE(null);setBI("")}else{setBE(c.id);setBI(String(b||""))}}} style=${{padding:"4px 9px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${bE===c.id?"✕":b>0?"✏️":t("limit_btn")}</button>
       </div>
       ${bE===c.id&&html`<div style=${{display:"flex",gap:6,marginBottom:6}}>
         <input class="inp-field" type="text" inputMode="decimal" placeholder=${t("limit_btn")} value=${bI} onInput=${function(e){setBI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontWeight:700}}/>
         <button onClick=${function(){svBud(c.id)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",background:"var(--blue)",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>${t("save_btn")}</button>
+        ${b>0&&html`<button onClick=${function(){removeBud(c.id)}} style=${{padding:"9px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.08)",color:"var(--red)",fontSize:11,fontWeight:700,cursor:"pointer"}}>🗑️</button>`}
       </div>`}
       ${b>0&&html`<div class="prog-track"><div class="prog-bar" style=${{width:p+"%",background:ov?"var(--red)":p>80?"var(--amber)":c.color,boxShadow:ov?"0 0 8px var(--redglow)":p>80?"0 0 8px rgba(245,158,11,0.4)":"none"}}/></div>`}
     </div>`})}
