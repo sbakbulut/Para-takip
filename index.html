@@ -214,6 +214,34 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
   box-shadow:0 0 0 4px var(--blueglow);
   margin-bottom:6px;
 }
+
+/* Swipe to delete */
+.exp-row-wrap{position:relative;overflow:hidden;border-radius:var(--radius-sm);margin-bottom:6px}
+.swipe-del-bg{position:absolute;right:0;top:0;bottom:0;width:80px;background:linear-gradient(135deg,#dc2626,#ff4466);display:flex;align-items:center;justify-content:center;font-size:20px;border-radius:var(--radius-sm)}
+.exp-row-inner{transition:transform 0.15s;touch-action:pan-y}
+.exp-row-inner.swiped{transform:translateX(-80px)}
+
+/* PIN screen */
+.pin-screen{position:fixed;inset:0;z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);padding:32px}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--blue);transition:background 0.15s}
+.pin-dot.filled{background:var(--blue);box-shadow:0 0 10px var(--blueglow)}
+.pin-key{width:72px;height:72px;border-radius:50%;background:var(--card);border:1px solid var(--border);font-size:22px;font-weight:700;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center}
+.pin-key:active{transform:scale(0.92);background:var(--blue);color:#fff}
+
+/* Budget alert badge */
+.notif-dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 6px var(--redglow);display:inline-block;margin-left:3px;vertical-align:middle;animation:pulse 2s ease infinite}
+
+/* Annual summary card */
+.annual-card{border-radius:20px;padding:18px;background:linear-gradient(135deg,#1e1b4b,#312e81);border:1px solid rgba(99,102,241,0.3);margin-bottom:16px}
+
+/* Print styles */
+@media print{
+  .tabbar,.stat-card,.btn-primary,.btn-sm,button:not(.print-keep){display:none!important}
+  body{background:#fff!important;color:#000!important}
+  .glass{background:#fff!important;border:1px solid #ccc!important;box-shadow:none!important}
+  #root{padding-bottom:0!important}
+  body::before{display:none!important}
+}
 </style>
 </head>
 <body class="dark">
@@ -334,7 +362,20 @@ tr:{
   add_to_date:"'a Ekle",save_btn:"Kaydet",
   debt_default1:"Kredi Kartı",debt_default2:"Kredi/Taksit",
   locale:"tr-TR",expenses_label:"Harcamalar",
-  this_month_cur:"bu ay",income_label:"Gelir",expense_label:"Harcama"
+  this_month_cur:"bu ay",income_label:"Gelir",expense_label:"Harcama",
+  print_report:"🖨️ Raporu Yazdır",import_csv:"📥 CSV İçe Aktar",
+  annual_summary:"Yıllık Özet",annual_income:"Yıllık Gelir",annual_expense:"Yıllık Harcama",
+  annual_savings:"Yıllık Tasarruf",savings_rate:"Tasarruf Oranı",top_cat:"En Yüksek Kategori",
+  debt_calc:"Geri Ödeme Tahmini",monthly_pay:"Aylık Ödeme",months_to_pay:"ay sonra kapanır",
+  no_debt_remain:"Borç kalmadı!",
+  pin_protect:"PIN Koruması",set_pin:"PIN Belirle",enter_pin:"PIN Giriniz",
+  pin_label:"4 haneli PIN",pin_confirm:"PIN Tekrar",pin_mismatch:"PIN'ler uyuşmuyor",
+  pin_wrong:"Yanlış PIN!",pin_disable:"PIN Kaldır",pin_unlock:"Aç",
+  notifications:"Bildirimler",notif_enable:"Bildirimleri Etkinleştir",
+  notif_enabled:"✓ Bildirimler Açık",notif_perm:"İzin alınamadı",
+  budget_profile:"Bütçe Profili",new_profile:"+ Yeni Profil",profile_name:"Profil adı",
+  save_profile:"Profili Kaydet",load_profile:"Yükle",delete_profile:"Sil",
+  active_profile:"Aktif",no_profiles:"Henüz profil yok."
 },
 en:{
   language:"Language",currency:"Currency",data:"Data",
@@ -376,22 +417,35 @@ en:{
   add_to_date:" Add",save_btn:"Save",
   debt_default1:"Credit Card",debt_default2:"Loan/Installment",
   locale:"en-US",expenses_label:"Expenses",
-  this_month_cur:"this month",income_label:"Income",expense_label:"Expenses"
+  this_month_cur:"this month",income_label:"Income",expense_label:"Expenses",
+  print_report:"🖨️ Print Report",import_csv:"📥 Import CSV",
+  annual_summary:"Annual Summary",annual_income:"Annual Income",annual_expense:"Annual Expenses",
+  annual_savings:"Annual Savings",savings_rate:"Savings Rate",top_cat:"Top Category",
+  debt_calc:"Payoff Estimate",monthly_pay:"Monthly Payment",months_to_pay:"months to payoff",
+  no_debt_remain:"No remaining debt!",
+  pin_protect:"PIN Protection",set_pin:"Set PIN",enter_pin:"Enter PIN",
+  pin_label:"4-digit PIN",pin_confirm:"Confirm PIN",pin_mismatch:"PINs don't match",
+  pin_wrong:"Wrong PIN!",pin_disable:"Remove PIN",pin_unlock:"Unlock",
+  notifications:"Notifications",notif_enable:"Enable Notifications",
+  notif_enabled:"✓ Notifications On",notif_perm:"Permission denied",
+  budget_profile:"Budget Profile",new_profile:"+ New Profile",profile_name:"Profile name",
+  save_profile:"Save Profile",load_profile:"Load",delete_profile:"Delete",
+  active_profile:"Active",no_profiles:"No profiles yet."
 }
 };
 function fmt(n,cur){if(!cur)cur={sym:"₺",loc:"tr-TR"};return(!n&&n!==0)?"0 "+cur.sym:Math.round(n).toLocaleString(cur.loc)+" "+cur.sym}
 function mkk(y,m){return y+"-"+String(m+1).padStart(2,"0")}
 function tdy(){return new Date().toISOString().slice(0,10)}
 function prd(s){var p=s.split("-");return{y:+p[0],m:+p[1]-1,d:+p[2]}}
-function ini(){var _l=localStorage.getItem("pk_lang")||"tr";var _dc=_l==="tr"?DC:DC_EN;var _t=T[_l]||T.tr;return{expenses:[],incomes:{},incomeEntries:[],debts:[{id:"kart",label:_t.debt_default1,icon:"💳",total:0,paid:0,payments:[]},{id:"kredi",label:_t.debt_default2,icon:"🏦",total:0,paid:0,payments:[]}],budgets:{},categories:_dc.map(function(c){return Object.assign({},c)}),templates:[],recurring:[],savings:{goal:0,label:_t.savings_label}}}
+function ini(){var _l=localStorage.getItem("pk_lang")||"tr";var _dc=_l==="tr"?DC:DC_EN;var _t=T[_l]||T.tr;return{expenses:[],incomes:{},incomeEntries:[],debts:[{id:"kart",label:_t.debt_default1,icon:"💳",total:0,paid:0,payments:[]},{id:"kredi",label:_t.debt_default2,icon:"🏦",total:0,paid:0,payments:[]}],budgets:{},categories:_dc.map(function(c){return Object.assign({},c)}),templates:[],recurring:[],savings:{goal:0,label:_t.savings_label},budgetProfiles:[]}}
 function ld(){try{var d=localStorage.getItem(KY);return d?JSON.parse(d):null}catch(e){return null}}
 function sv(d){try{localStorage.setItem(KY,JSON.stringify(d))}catch(e){}}
 function App(){
-  var _th=h(function(){return localStorage.getItem("pk_theme")||"dark"}),theme=_th[0],setTheme=_th[1];
+  var _th=h(function(){return localStorage.getItem("pk_theme")||(window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}),theme=_th[0],setTheme=_th[1];
   var _lang=h(function(){return localStorage.getItem("pk_lang")||"tr"}),lang=_lang[0],setLang=_lang[1];
   var _curId=h(function(){return localStorage.getItem("pk_cur")||"TRY"}),curId=_curId[0],setCurId=_curId[1];
   var _showSet=h(false),showSet=_showSet[0],setShowSet=_showSet[1];
-  var _s=h(function(){var d=ld();if(d){if(!d.categories)d.categories=DC.map(function(c){return Object.assign({},c)});if(!d.templates)d.templates=[];if(!d.recurring)d.recurring=[];if(!d.savings){var _sl=localStorage.getItem("pk_lang")||"tr";d.savings={goal:0,label:(T[_sl]||T.tr).savings_label};}if(!d.incomeEntries)d.incomeEntries=[];return Object.assign(ini(),d)}return ini()});
+  var _s=h(function(){var d=ld();if(d){if(!d.categories)d.categories=DC.map(function(c){return Object.assign({},c)});if(!d.templates)d.templates=[];if(!d.recurring)d.recurring=[];if(!d.savings){var _sl=localStorage.getItem("pk_lang")||"tr";d.savings={goal:0,label:(T[_sl]||T.tr).savings_label};}if(!d.incomeEntries)d.incomeEntries=[];if(!d.budgetProfiles)d.budgetProfiles=[];return Object.assign(ini(),d)}return ini()});
   var S=_s[0],setS=_s[1];
   var _tab=h("harcama"),tab=_tab[0],setTab=_tab[1];
   var _amt=h(""),amt=_amt[0],setAmt=_amt[1];
@@ -446,6 +500,19 @@ function App(){
   var _eRDay=h("1"),eRDay=_eRDay[0],setERDay=_eRDay[1];
   var amtRef=ur(null);
   var fileRef=ur(null);
+  var csvImportRef=ur(null);
+  var _swipedId=h(null),swipedId=_swipedId[0],setSwipedId=_swipedId[1];
+  var _swipeSX=h(0),swipeSX=_swipeSX[0],setSwipeSX=_swipeSX[1];
+  var _pinLocked=h(function(){return!!localStorage.getItem("pk_pin")}),pinLocked=_pinLocked[0],setPinLocked=_pinLocked[1];
+  var _pinInput=h(""),pinInput=_pinInput[0],setPinInput=_pinInput[1];
+  var _pinWrong=h(false),pinWrong=_pinWrong[0],setPinWrong=_pinWrong[1];
+  var _showPinSet=h(false),showPinSet=_showPinSet[0],setShowPinSet=_showPinSet[1];
+  var _pin1=h(""),pin1=_pin1[0],setPin1=_pin1[1];
+  var _pin2=h(""),pin2=_pin2[0],setPin2=_pin2[1];
+  var _notifOn=h(function(){return localStorage.getItem("pk_notif")==="1"}),notifOn=_notifOn[0],setNotifOn=_notifOn[1];
+  var _calcPay=h(""),calcPay=_calcPay[0],setCalcPay=_calcPay[1];
+  var _showProf=h(false),showProf=_showProf[0],setShowProf=_showProf[1];
+  var _profName=h(""),profName=_profName[0],setProfName=_profName[1];
 
   var dk=theme==="dark";
   var MN=lang==="tr"?MO:MOE;
@@ -459,9 +526,18 @@ function App(){
     document.getElementById("themeColor").content=dk?"#07090f":"#f0ede8";
     localStorage.setItem("pk_theme",theme);
   },[theme]);
-  ef(function(){localStorage.setItem("pk_lang",lang)},[lang]);
+  ef(function(){localStorage.setItem("pk_lang",lang);document.documentElement.lang=lang;},[lang]);
   ef(function(){localStorage.setItem("pk_cur",curId)},[curId]);
   ef(function(){sv(S)},[S]);
+  ef(function(){localStorage.setItem("pk_notif",notifOn?"1":"0")},[notifOn]);
+  ef(function(){
+    if(!notifOn||!("Notification" in window)||Notification.permission!=="granted")return;
+    var today=new Date();var cMK2=mkk(today.getFullYear(),today.getMonth());
+    var pending=(S.recurring||[]).filter(function(r){return!(r.paidMonths||[]).includes(cMK2)});
+    if(pending.length>0){
+      try{new Notification("Para Kontrol 💸",{body:pending.length+(lang==="tr"?" tekrarlayan ödeme bekliyor":" recurring payment(s) pending today"),icon:"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>💸</text></svg>"})}catch(e){}
+    }
+  },[]);
 
   var now=new Date();
   var cMK=mkk(now.getFullYear(),now.getMonth());
@@ -513,6 +589,25 @@ function App(){
     return mComp.filter(function(m){return m.income>0||m.expense>0}).map(function(m){return{label:m.label,net:m.net,income:m.income,expense:m.expense}});
   },[mComp]);
 
+  var budgetAlert=um(function(){
+    return cats.some(function(c){var sp=cTo[c.id]||0;var b=S.budgets[c.id]||0;return b>0&&sp>=b*0.8});
+  },[cats,cTo,S.budgets]);
+
+  var annualData=um(function(){
+    var yr=now.getFullYear();var totalInc=0;var totalExp=0;var catMap={};
+    for(var m=0;m<12;m++){
+      var mk2=mkk(yr,m);
+      var exps=S.expenses.filter(function(e){return e.date&&e.date.startsWith(mk2)});
+      totalExp+=exps.reduce(function(s,e){return s+e.amount},0);
+      exps.forEach(function(e){catMap[e.category]=(catMap[e.category]||0)+e.amount});
+      var incE=(S.incomeEntries||[]).filter(function(e){return e.monthKey===mk2});
+      totalInc+=incE.length>0?incE.reduce(function(s,e){return s+e.amount},0):((S.incomes&&S.incomes[mk2])||0);
+    }
+    var topCatId=null,topCatAmt=0;Object.keys(catMap).forEach(function(k){if(catMap[k]>topCatAmt){topCatAmt=catMap[k];topCatId=k}});
+    var net=totalInc-totalExp;var rate=totalInc>0?Math.round((net/totalInc)*100):null;
+    return{income:totalInc,expense:totalExp,net:net,rate:rate,topCat:topCatId?fc(topCatId):null};
+  },[S,now.getFullYear()]);
+
   var dim=new Date(vm.y,vm.m+1,0).getDate();
   var fd=new Date(vm.y,vm.m,1).getDay();
   var cs=fd===0?6:fd-1;
@@ -543,6 +638,14 @@ function App(){
   function delCat(cid){if(cats.length<=1)return;setS(function(p){return Object.assign({},p,{categories:cats.filter(function(c){return c.id!==cid})})});if(cat===cid)setCat((cats.find(function(c){return c.id!==cid})||{}).id||"market")}
   function addCt(){if(!ncN.trim())return;setS(function(p){return Object.assign({},p,{categories:cats.concat([{id:"c_"+Date.now(),label:ncN.trim(),icon:ncI,color:ncC}])})});setAcM(false);setNcN("");setNcI("📦");setNcC("#22c55e");setSIP(false)}
   function resetAll(){if(confirm(t("reset_confirm")))setS(ini())}
+  function importCSV(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;var reader=new FileReader();reader.onload=function(e){var lines=e.target.result.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});var newExp=[];var imported=0;lines.slice(1).forEach(function(line){var parts=[];var cur2="";var inQ=false;for(var i=0;i<line.length;i++){if(line[i]==='"'){inQ=!inQ}else if(line[i]===","&&!inQ){parts.push(cur2);cur2=""}else{cur2+=line[i]}}parts.push(cur2);var date=parts[0]&&parts[0].trim();var catLabel=parts[1]&&parts[1].trim();var amount=parseFloat((parts[3]||"").replace(",","."));var noteV=(parts[5]||"").trim();if(!date||!amount||amount<=0)return;var matchCat=cats.find(function(c){return c.label===catLabel})||cats[cats.length-1];newExp.push({id:"csv_"+Date.now()+"_"+imported,amount:amount,category:matchCat.id,note:noteV,date:date,time:"—"});imported++});if(imported>0){setS(function(p){return Object.assign({},p,{expenses:p.expenses.concat(newExp)})});alert(imported+(lang==="tr"?" harcama içe aktarıldı":" expenses imported"))}else{alert(t("invalid_file"))}};reader.readAsText(file,"utf-8");ev.target.value=""}
+  function pinCheck(digit){var next=pinInput+digit;if(next.length<=4){setPinInput(next);if(next.length===4){var stored=localStorage.getItem("pk_pin");if(next===stored){setPinLocked(false);setPinInput("");setPinWrong(false)}else{setPinWrong(true);setTimeout(function(){setPinInput("");setPinWrong(false)},700)}}}}
+  function pinSetSave(){if(pin1.length===4&&pin1===pin2){localStorage.setItem("pk_pin",pin1);setShowPinSet(false);setPin1("");setPin2("");alert(lang==="tr"?"PIN belirlendi":"PIN set successfully")}else{alert(t("pin_mismatch"))}}
+  function pinRemove(){localStorage.removeItem("pk_pin");setPinLocked(false);setShowPinSet(false)}
+  function requestNotif(){if(!("Notification" in window)){alert(t("notif_perm"));return}Notification.requestPermission().then(function(perm){if(perm==="granted"){setNotifOn(true)}else{alert(t("notif_perm"))}})}
+  function saveBudgetProfile(){if(!profName.trim())return;var newProf={id:"bp_"+Date.now(),name:profName.trim(),budgets:Object.assign({},S.budgets)};setS(function(p){return Object.assign({},p,{budgetProfiles:(p.budgetProfiles||[]).concat([newProf])})});setShowProf(false);setProfName("")}
+  function loadBudgetProfile(prof){setS(function(p){return Object.assign({},p,{budgets:Object.assign({},prof.budgets)})})}
+  function deleteBudgetProfile(pid){setS(function(p){return Object.assign({},p,{budgetProfiles:(p.budgetProfiles||[]).filter(function(pr){return pr.id!==pid})})})}
   function addRec(){if(!recLbl.trim()||!recAmt)return;var a=parseFloat(recAmt.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{recurring:recs.concat([{id:"r_"+Date.now(),label:recLbl.trim(),category:recCat,amount:a,dayOfMonth:parseInt(recDay)||1,paidMonths:[]}])})});setRecForm(false);setRecLbl("");setRecAmt("");setRecCat("fatura");setRecDay("1")}
   function delRec(rid){setS(function(p){return Object.assign({},p,{recurring:recs.filter(function(r){return r.id!==rid})})})}
   function startEditRec(r){setERId(r.id);setERLbl(r.label);setERAmt(String(r.amount));setERCat(r.category);setERDay(String(r.dayOfMonth||1))}
@@ -576,18 +679,44 @@ function App(){
         <button onClick=${function(){setEXId(null)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
       </div>
     </div>`}
-    return html`<div class="exp-row fade-in" key=${exp.id}>
-      <div style=${{width:38,height:38,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,background:ct.color+"20",border:"1px solid "+ct.color+"30",flexShrink:0}}>${ct.icon}</div>
-      <div style=${{flex:1,minWidth:0}}>
-        <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style=${{fontSize:13,fontWeight:600,color:"var(--txt)"}}>${ct.label}</span>
-          <span class="num num-sm glow-red">${f(exp.amount)}</span>
+    var isSwiped=swipedId===exp.id;
+    return html`<div class="exp-row-wrap fade-in" key=${exp.id}
+      onTouchStart=${function(e){setSwipeSX(e.touches[0].clientX);setSwipedId(null)}}
+      onTouchEnd=${function(e){var dx=e.changedTouches[0].clientX-swipeSX;if(dx<-70){setSwipedId(exp.id)}else if(dx>30){setSwipedId(null)}}}>
+      <div class="swipe-del-bg">🗑️</div>
+      <div class=${"exp-row exp-row-inner"+(isSwiped?" swiped":"")} onClick=${function(){if(isSwiped){delExp(exp.id);setSwipedId(null)}}}>
+        <div style=${{width:38,height:38,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,background:ct.color+"20",border:"1px solid "+ct.color+"30",flexShrink:0}}>${ct.icon}</div>
+        <div style=${{flex:1,minWidth:0}}>
+          <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style=${{fontSize:13,fontWeight:600,color:"var(--txt)"}}>${ct.label}</span>
+            <span class="num num-sm glow-red">${f(exp.amount)}</span>
+          </div>
+          ${exp.note&&html`<p style=${{color:"var(--sub)",fontSize:11,margin:"2px 0 0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${exp.note}</p>`}
+          <span style=${{color:"var(--dim)",fontSize:10,fontFamily:"var(--mono)"}}>${showDate?exp.date:(exp.time||"")}</span>
         </div>
-        ${exp.note&&html`<p style=${{color:"var(--sub)",fontSize:11,margin:"2px 0 0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${exp.note}</p>`}
-        <span style=${{color:"var(--dim)",fontSize:10,fontFamily:"var(--mono)"}}>${showDate?exp.date:(exp.time||"")}</span>
+        <button onClick=${function(e){e.stopPropagation();startEdit(exp)}} style=${{color:"var(--dim)",fontSize:13,padding:"5px",opacity:0.6}}>✏️</button>
+        <button onClick=${function(e){e.stopPropagation();delExp(exp.id)}} style=${{color:"var(--dim)",fontSize:18,padding:"5px"}}>×</button>
       </div>
-      <button onClick=${function(){startEdit(exp)}} style=${{color:"var(--dim)",fontSize:13,padding:"5px",opacity:0.6}}>✏️</button>
-      <button onClick=${function(){delExp(exp.id)}} style=${{color:"var(--dim)",fontSize:18,padding:"5px"}}>×</button>
+    </div>`;
+  }
+
+  if(pinLocked){
+    var pinKeys=["1","2","3","4","5","6","7","8","9","","0","⌫"];
+    return html`<div class="pin-screen">
+      <div style=${{width:44,height:44,borderRadius:14,background:"linear-gradient(135deg,#3b82f6,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,marginBottom:24}}>💸</div>
+      <h2 style=${{fontSize:20,fontWeight:800,marginBottom:8,letterSpacing:"-0.02em"}}>Para Kontrol</h2>
+      <p style=${{fontSize:13,color:"var(--sub)",marginBottom:32}}>${t("enter_pin")}</p>
+      <div style=${{display:"flex",gap:14,marginBottom:32}}>
+        ${[0,1,2,3].map(function(i){return html`<div key=${i} class=${"pin-dot"+(pinInput.length>i?" filled":"")}></div>`})}
+      </div>
+      ${pinWrong&&html`<p style=${{color:"var(--red)",fontSize:13,fontWeight:700,marginBottom:16,animation:"pulse 0.5s ease"}}>${t("pin_wrong")}</p>`}
+      <div style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:240}}>
+        ${pinKeys.map(function(k,i){
+          if(k==="")return html`<div key=${i}/>`;
+          if(k==="⌫")return html`<button key=${i} class="pin-key" onClick=${function(){setPinInput(function(p){return p.slice(0,-1)});setPinWrong(false)}} style=${{fontSize:18}}>${k}</button>`;
+          return html`<button key=${i} class="pin-key" onClick=${function(){pinCheck(k)}}>${k}</button>`;
+        })}
+      </div>
     </div>`;
   }
 
@@ -629,7 +758,27 @@ function App(){
       <button onClick=${exportJSON} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,fontWeight:600,textAlign:"left",cursor:"pointer"}}>${t("export_json")}</button>
       <button onClick=${function(){if(fileRef.current)fileRef.current.click()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(6,255,165,0.3)",background:"rgba(6,255,165,0.06)",color:"var(--green)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("restore_json")}</button>
       <input ref=${fileRef} type="file" accept=".json" onChange=${importJSON} style=${{display:"none"}}/>
+      <button onClick=${function(){window.print()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("print_report")}</button>
     </div>
+    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginTop:16,marginBottom:10}}>${t("notifications")}</p>
+    <div style=${{display:"flex",flexDirection:"column",gap:6}}>
+      ${notifOn?html`<div style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",background:"rgba(6,255,165,0.06)",border:"1px solid rgba(6,255,165,0.3)",color:"var(--green)",fontSize:12,fontWeight:700}}>${t("notif_enabled")}</div>
+        <button onClick=${function(){setNotifOn(false)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,fontWeight:600,textAlign:"left",cursor:"pointer"}}>✕ ${lang==="tr"?"Kapat":"Turn Off"}</button>`
+      :html`<button onClick=${requestNotif} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(245,158,11,0.3)",background:"rgba(245,158,11,0.06)",color:"var(--amber)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("notif_enable")}</button>`}
+    </div>
+    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginTop:16,marginBottom:10}}>${t("pin_protect")}</p>
+    ${!showPinSet?html`<div style=${{display:"flex",gap:6}}>
+      ${localStorage.getItem("pk_pin")?html`<button onClick=${pinRemove} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("pin_disable")}</button>`:null}
+      <button onClick=${function(){setShowPinSet(true);setPin1("");setPin2("")}} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("set_pin")}</button>
+    </div>`
+    :html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
+      <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_label")} value=${pin1} onInput=${function(e){setPin1(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
+      <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_confirm")} value=${pin2} onInput=${function(e){setPin2(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
+      <div style=${{display:"flex",gap:6}}>
+        <button onClick=${pinSetSave} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save_btn")}</button>
+        <button onClick=${function(){setShowPinSet(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
+      </div>
+    </div>`}
   </div>`}
 
   <!-- STAT CARDS -->
@@ -846,6 +995,29 @@ function App(){
         </div>
       </div>`}
     </div>`}
+    <!-- DEBT CALCULATOR -->
+    ${adO&&html`<div class="glass" style=${{padding:18,marginTop:16}}>
+      <p style=${{fontSize:14,fontWeight:700,marginBottom:14}}>${"🧮 "+t("debt_calc")}</p>
+      ${function(){var remain=Math.max(0,(adO.total||0)-(adO.paid||0));if(remain<=0)return html`<p style=${{color:"var(--green)",fontSize:13,fontWeight:700,textAlign:"center",padding:"8px 0"}}>✅ ${t("no_debt_remain")}</p>`;
+        var pay=parseFloat(calcPay.replace(",","."));var months=pay>0?Math.ceil(remain/pay):null;
+        return html`<div>
+          <div style=${{display:"flex",gap:8,marginBottom:12}}>
+            <input class="inp-field" type="text" inputMode="decimal" placeholder=${t("monthly_pay")} value=${calcPay} onInput=${function(e){setCalcPay(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:15,fontWeight:700}}/>
+            <span style=${{display:"flex",alignItems:"center",color:"var(--sub)",fontFamily:"var(--mono)",fontWeight:700,fontSize:16}}>${cur.sym}</span>
+          </div>
+          ${months!==null&&html`<div style=${{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div style=${{padding:14,borderRadius:"var(--radius-sm)",background:"rgba(59,130,246,0.08)",border:"1px solid rgba(59,130,246,0.2)",textAlign:"center"}}>
+              <p class="num" style=${{fontSize:28,fontWeight:800,color:"var(--blue2)"}}>${months}</p>
+              <p style=${{fontSize:10,color:"var(--sub)",fontWeight:600,marginTop:4}}>${lang==="tr"?"ay":"months"}</p>
+            </div>
+            <div style=${{padding:14,borderRadius:"var(--radius-sm)",background:"rgba(255,68,102,0.08)",border:"1px solid rgba(255,68,102,0.2)",textAlign:"center"}}>
+              <p class="num" style=${{fontSize:18,fontWeight:800,color:"var(--red)"}}>${f(pay*months)}</p>
+              <p style=${{fontSize:10,color:"var(--sub)",fontWeight:600,marginTop:4}}>${lang==="tr"?"toplam ödenecek":"total to pay"}</p>
+            </div>
+          </div>`}
+        </div>`;
+      }()}
+    </div>`}
   </div>`}
   <!-- BÜTÇE TAB -->
   ${tab==="butce"&&html`<div style=${{padding:"0 16px"}} class="fade-in">
@@ -996,6 +1168,26 @@ function App(){
       </div>`}
       ${b>0&&html`<div class="prog-track"><div class="prog-bar" style=${{width:p+"%",background:ov?"var(--red)":p>80?"var(--amber)":c.color,boxShadow:ov?"0 0 8px var(--redglow)":p>80?"0 0 8px rgba(245,158,11,0.4)":"none"}}/></div>`}
     </div>`})}
+
+    <!-- Budget Profiles -->
+    <div style=${{marginTop:20}}>
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <p style=${{fontSize:13,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase"}}>${t("budget_profile")}</p>
+        <button onClick=${function(){setShowProf(!showProf);setProfName("")}} style=${{padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px dashed rgba(99,102,241,0.4)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:11,fontWeight:700,cursor:"pointer"}}>${t("new_profile")}</button>
+      </div>
+      ${showProf&&html`<div class="glass" style=${{padding:14,marginBottom:12,borderColor:"rgba(99,102,241,0.25)"}}>
+        <input class="inp-field" type="text" placeholder=${t("profile_name")} value=${profName} onInput=${function(e){setProfName(e.target.value)}} style=${{marginBottom:8}}/>
+        <p style=${{fontSize:10,color:"var(--dim)",marginBottom:8}}>${lang==="tr"?"Mevcut limitler bu profile kaydedilecek":"Current limits will be saved to this profile"}</p>
+        <div style=${{display:"flex",gap:6}}><button onClick=${saveBudgetProfile} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save_profile")}</button><button onClick=${function(){setShowProf(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button></div>
+      </div>`}
+      ${(S.budgetProfiles||[]).length===0&&!showProf&&html`<p style=${{color:"var(--dim)",fontSize:12,textAlign:"center",padding:"12px 0"}}>${t("no_profiles")}</p>`}
+      ${(S.budgetProfiles||[]).map(function(prof){return html`<div key=${prof.id} style=${{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",borderRadius:"var(--radius-sm)",background:"var(--card)",border:"1px solid var(--border)",marginBottom:5}}>
+        <span style=${{fontSize:16}}>📋</span>
+        <span style=${{flex:1,fontSize:13,fontWeight:600}}>${prof.name}</span>
+        <button onClick=${function(){loadBudgetProfile(prof)}} style=${{padding:"5px 11px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(6,255,165,0.3)",background:"rgba(6,255,165,0.06)",color:"var(--green)",fontSize:11,fontWeight:700,cursor:"pointer"}}>${t("load_profile")}</button>
+        <button onClick=${function(){deleteBudgetProfile(prof.id)}} style=${{color:"var(--dim)",fontSize:16,padding:"4px 6px"}}>×</button>
+      </div>`})}
+    </div>
   </div>`}
   <!-- ÖZET TAB -->
   ${tab==="ozet"&&html`<div style=${{padding:"0 16px"}} class="fade-in">
@@ -1165,6 +1357,22 @@ function App(){
       </div>`;
     }()}
 
+    <!-- Annual Summary -->
+    ${(annualData.income>0||annualData.expense>0)&&html`<div class="annual-card" style=${{marginBottom:16}}>
+      <p style=${{fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.5)",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:14}}>${now.getFullYear()+" — "+t("annual_summary")}</p>
+      <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+        <div><p style=${{fontSize:10,color:"rgba(255,255,255,0.5)",fontWeight:600,marginBottom:3}}>${t("annual_income")}</p><p class="num" style=${{fontSize:16,fontWeight:800,color:"#06ffa5"}}>${f(annualData.income)}</p></div>
+        <div><p style=${{fontSize:10,color:"rgba(255,255,255,0.5)",fontWeight:600,marginBottom:3}}>${t("annual_expense")}</p><p class="num" style=${{fontSize:16,fontWeight:800,color:"#ff4466"}}>${f(annualData.expense)}</p></div>
+        <div><p style=${{fontSize:10,color:"rgba(255,255,255,0.5)",fontWeight:600,marginBottom:3}}>${t("annual_savings")}</p><p class="num" style=${{fontSize:16,fontWeight:800,color:annualData.net>=0?"#06ffa5":"#ff4466"}}>${f(annualData.net)}</p></div>
+        <div><p style=${{fontSize:10,color:"rgba(255,255,255,0.5)",fontWeight:600,marginBottom:3}}>${t("savings_rate")}</p><p class="num" style=${{fontSize:16,fontWeight:800,color:"#f59e0b"}}>${annualData.rate!==null?"%"+annualData.rate:"—"}</p></div>
+      </div>
+      ${annualData.topCat&&html`<div style=${{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:"var(--radius-xs)",background:"rgba(255,255,255,0.07)"}}>
+        <span style=${{fontSize:16}}>${annualData.topCat.icon}</span>
+        <span style=${{fontSize:11,color:"rgba(255,255,255,0.7)",fontWeight:600}}>${t("top_cat")+": "}</span>
+        <span style=${{fontSize:12,color:"#fff",fontWeight:700}}>${annualData.topCat.label}</span>
+      </div>`}
+    </div>`}
+
     <!-- Debt status -->
     <p style=${{fontSize:13,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:12}}>${t("debt_status")}</p>
     ${S.debts.map(function(d){var p=d.total>0?Math.min(100,(d.paid/d.total)*100):0;return html`<div key=${d.id} class="glass" style=${{padding:14,marginBottom:8}}>
@@ -1183,8 +1391,11 @@ function App(){
   <!-- BOTTOM TAB BAR -->
   <div style=${{position:"fixed",bottom:0,left:0,right:0,padding:"12px 16px 16px",zIndex:100,background:dk?"linear-gradient(to top, rgba(7,9,15,0.98) 60%, rgba(7,9,15,0) 100%)":"linear-gradient(to top, rgba(240,237,232,0.98) 60%, rgba(240,237,232,0) 100%)"}}>
     <div class="tabbar" style=${{maxWidth:448,margin:"0 auto"}}>
-      ${[{id:"harcama",lk:"tab_exp",i:"✏️"},{id:"borc",lk:"tab_debts",i:"💳"},{id:"butce",lk:"tab_budget",i:"📊"},{id:"ozet",lk:"tab_summary",i:"📈"}].map(function(tb){var act=tab===tb.id;return html`<button key=${tb.id} onClick=${function(){setTab(tb.id)}} class=${"tab-btn"+(act?" active":"")}>
-        <span style=${{fontSize:18}}>${tb.i}</span>
+      ${[{id:"harcama",lk:"tab_exp",i:"✏️"},{id:"borc",lk:"tab_debts",i:"💳"},{id:"butce",lk:"tab_budget",i:"📊"},{id:"ozet",lk:"tab_summary",i:"📈"}].map(function(tb){var act=tab===tb.id;var showBadge=tb.id==="butce"&&budgetAlert&&!act;return html`<button key=${tb.id} onClick=${function(){setTab(tb.id)}} class=${"tab-btn"+(act?" active":"")}>
+        <div style=${{position:"relative",display:"inline-flex",alignItems:"center",justifyContent:"center"}}>
+          <span style=${{fontSize:18}}>${tb.i}</span>
+          ${showBadge&&html`<span class="notif-dot" style=${{position:"absolute",top:-2,right:-6}}/>`}
+        </div>
         <span>${t(tb.lk)}</span>
       </button>`})}
     </div>
