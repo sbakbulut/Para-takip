@@ -335,7 +335,7 @@ tr:{
   amount_ph:"Tutar",note_ph:"Not",save:"✓ Kaydet",cancel:"İptal",
   total_debt:"Toplam Borç",new_btn:"+ Yeni",debt_name:"Borç adı",total_amount:"Toplam tutar",
   edit_btn:"Düzenle",delete_btn:"Sil",paid_lbl:"Ödenen",remaining_lbl:"Kalan",
-  debt_name_ph:"Borç adı",debt_set_total:"Toplam:",debt_add_amt:"Ekle:",reset_paid_btn:"Ödemeyi Sıfırla",
+  debt_name_ph:"Borç adı",debt_set_total:"Toplam:",debt_add_amt:"Ekle",reset_debt_btn:"Borcu Sıfırla",
   make_payment:"Ödeme Yap",pay_btn:"💳 Öde",payment_history:"Ödeme Geçmişi",
   income_mgmt:"Gelir Yönetimi",add_income:"+ Ekle",not_entered:"Girilmedi",
   note_opt:"Not (opsiyonel)",income_history:"Gelir Geçmişi",this_month:"(bu ay)",
@@ -391,7 +391,7 @@ en:{
   amount_ph:"Amount",note_ph:"Note",save:"✓ Save",cancel:"Cancel",
   total_debt:"Total Debt",new_btn:"+ New",debt_name:"Debt name",total_amount:"Total amount",
   edit_btn:"Edit",delete_btn:"Delete",paid_lbl:"Paid",remaining_lbl:"Remaining",
-  debt_name_ph:"Debt name",debt_set_total:"Total:",debt_add_amt:"Add:",reset_paid_btn:"Reset Paid",
+  debt_name_ph:"Debt name",debt_set_total:"Total:",debt_add_amt:"Add",reset_debt_btn:"Reset Debt",
   make_payment:"Make Payment",pay_btn:"💳 Pay",payment_history:"Payment History",
   income_mgmt:"Income Management",add_income:"+ Add",not_entered:"Not entered",
   note_opt:"Note (optional)",income_history:"Income History",this_month:"(this month)",
@@ -631,7 +631,7 @@ function App(){
   function payDt(did){var a=parseFloat(dpA.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;return Object.assign({},d,{paid:d.paid+a,payments:(d.payments||[]).concat([{id:Date.now(),amount:a,date:tdy()}])})})})});setDpA("")}
   function updDT(did){var v=parseFloat(dTI.replace(",","."));if(isNaN(v)||v<0)return;var lbl=dLI.trim();setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;var upd=Object.assign({},d,{total:v});if(lbl)upd.label=lbl;return upd})})});setEDI(null);setDTI("");setDLI("")}
   function addToDbt(did){var v=parseFloat(dAI.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:d.total+v}):d})})});setDAI("")}
-  function resetPaid(did){setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{paid:0,payments:[]}):d})})})}
+  function resetDebt(did){setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:0,paid:0,payments:[]}):d})})})}
   function removeBud(cid){var bu=Object.assign({},S.budgets);delete bu[cid];setS(function(p){return Object.assign({},p,{budgets:bu})});setBE(null);setBI("")}
   function addDbt(){if(!nDL.trim())return;var v=parseFloat(nDT.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.concat([{id:"d_"+Date.now(),label:nDL.trim(),icon:"📄",total:v,paid:0,payments:[]}])})});setAdM(false);setNDL("");setNDT("")}
   function delDbt(did){if(!confirm(t("delete_confirm")))return;setS(function(p){return Object.assign({},p,{debts:p.debts.filter(function(d){return d.id!==did})})});if(aD===did)setAD((S.debts.find(function(d){return d.id!==did})||{}).id||"")}
@@ -973,13 +973,12 @@ function App(){
             <input class="inp-field" type="text" inputMode="decimal" value=${dTI} onInput=${function(e){setDTI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:14,fontWeight:700}}/>
             <button onClick=${function(){updDT(adO.id)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",background:"var(--blue)",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>${t("save_btn")}</button>
           </div>
-          <div style=${{display:"flex",gap:6,alignItems:"center"}}>
-            <span style=${{fontSize:11,color:"var(--sub)",whiteSpace:"nowrap"}}>${t("debt_add_amt")}</span>
-            <input class="inp-field" type="text" inputMode="decimal" value=${dAI} onInput=${function(e){setDAI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:14,fontWeight:700}}/>
-            <button onClick=${function(){addToDbt(adO.id)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",background:"var(--green)",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",border:"none"}}>+</button>
-          </div>
-          <button onClick=${function(){if(confirm(t("delete_confirm")))resetPaid(adO.id)}} style=${{alignSelf:"flex-start",padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.08)",color:"var(--red)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${t("reset_paid_btn")}</button>
-        </div>`:html`<p class="num num-lg" style=${{color:"var(--txt)"}}>${f(adO.total)}</p>`}
+          <button onClick=${function(){if(confirm(t("delete_confirm")))resetDebt(adO.id)}} style=${{alignSelf:"flex-start",padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.08)",color:"var(--red)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${t("reset_debt_btn")}</button>
+        </div>`:html`<div style=${{display:"flex",alignItems:"center",gap:8}}>
+          <p class="num num-lg" style=${{color:"var(--txt)",flex:1,margin:0}}>${f(adO.total)}</p>
+          <input class="inp-field" type="text" inputMode="decimal" placeholder=${t("debt_add_amt")} value=${dAI} onInput=${function(e){setDAI(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{width:90,fontFamily:"var(--mono)",fontSize:13,fontWeight:700}}/>
+          <button onClick=${function(){addToDbt(adO.id)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",background:"var(--green)",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",border:"none",flexShrink:0}}>+</button>
+        </div>`}
         ${adO.total>0&&function(){var p=Math.min(100,(adO.paid/adO.total)*100);return html`<div>
           <div style=${{height:22,background:"var(--card2)",borderRadius:11,overflow:"hidden",border:"1px solid var(--border)"}}>
             <div style=${{height:"100%",width:p+"%",background:"linear-gradient(90deg,#06ffa5,#00d084)",borderRadius:11,display:"flex",alignItems:"center",justifyContent:"center",transition:"width 0.6s cubic-bezier(0.34,1.56,0.64,1)",boxShadow:"0 0 20px rgba(6,255,165,0.4)"}}>
