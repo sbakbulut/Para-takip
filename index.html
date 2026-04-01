@@ -444,6 +444,7 @@ function App(){
   var _lang=h(function(){return localStorage.getItem("pk_lang")||"tr"}),lang=_lang[0],setLang=_lang[1];
   var _curId=h(function(){return localStorage.getItem("pk_cur")||"TRY"}),curId=_curId[0],setCurId=_curId[1];
   var _showSet=h(false),showSet=_showSet[0],setShowSet=_showSet[1];
+  var _setSec=h(null),setSec=_setSec[0],setSetSec=_setSec[1];
   var _s=h(function(){var d=ld();if(d){if(!d.categories)d.categories=DC.map(function(c){return Object.assign({},c)});if(!d.templates)d.templates=[];if(!d.recurring)d.recurring=[];if(!d.savings){var _sl=localStorage.getItem("pk_lang")||"tr";d.savings={goal:0,label:(T[_sl]||T.tr).savings_label};}if(!d.incomeEntries)d.incomeEntries=[];if(!d.budgetProfiles)d.budgetProfiles=[];return Object.assign(ini(),d)}return ini()});
   var S=_s[0],setS=_s[1];
   var _tab=h("harcama"),tab=_tab[0],setTab=_tab[1];
@@ -747,42 +748,58 @@ function App(){
   </div>
 
   <!-- SETTINGS -->
-  ${showSet&&html`<div class="glass fade-in" style=${{margin:"0 16px 16px",padding:18}}>
-    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:12}}>${t("language")}</p>
-    <div style=${{display:"flex",gap:6,marginBottom:16}}>
-      ${["tr","en"].map(function(l){var act=lang===l;return html`<button key=${l} onClick=${function(){setLang(l)}} style=${{flex:1,padding:"9px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer"}}>${l==="tr"?"🇹🇷 Türkçe":"🇬🇧 English"}</button>`})}
-    </div>
-    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:12}}>${t("currency")}</p>
-    <div style=${{display:"flex",gap:5,flexWrap:"wrap",marginBottom:16}}>
-      ${CURR.map(function(c){var act=curId===c.id;return html`<button key=${c.id} onClick=${function(){setCurId(c.id)}} style=${{padding:"6px 11px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${c.sym+" "+c.id}</button>`})}
-    </div>
-    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:10}}>${t("data")}</p>
-    <div style=${{display:"flex",flexDirection:"column",gap:6}}>
-      <button onClick=${exportCSV} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,fontWeight:600,textAlign:"left",cursor:"pointer"}}>${t("download_csv")}</button>
-      <button onClick=${exportJSON} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,fontWeight:600,textAlign:"left",cursor:"pointer"}}>${t("export_json")}</button>
-      <button onClick=${function(){if(fileRef.current)fileRef.current.click()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(6,255,165,0.3)",background:"rgba(6,255,165,0.06)",color:"var(--green)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("restore_json")}</button>
-      <input ref=${fileRef} type="file" accept=".json" onChange=${importJSON} style=${{display:"none"}}/>
-      <button onClick=${function(){window.print()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("print_report")}</button>
-    </div>
-    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginTop:16,marginBottom:10}}>${t("notifications")}</p>
-    <div style=${{display:"flex",flexDirection:"column",gap:6}}>
-      ${notifOn?html`<div style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",background:"rgba(6,255,165,0.06)",border:"1px solid rgba(6,255,165,0.3)",color:"var(--green)",fontSize:12,fontWeight:700}}>${t("notif_enabled")}</div>
-        <button onClick=${function(){setNotifOn(false)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,fontWeight:600,textAlign:"left",cursor:"pointer"}}>✕ ${lang==="tr"?"Kapat":"Turn Off"}</button>`
-      :html`<button onClick=${requestNotif} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(245,158,11,0.3)",background:"rgba(245,158,11,0.06)",color:"var(--amber)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("notif_enable")}</button>`}
-    </div>
-    <p style=${{fontSize:12,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginTop:16,marginBottom:10}}>${t("pin_protect")}</p>
-    ${!showPinSet?html`<div style=${{display:"flex",gap:6}}>
-      ${localStorage.getItem("pk_pin")?html`<button onClick=${pinRemove} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("pin_disable")}</button>`:null}
-      <button onClick=${function(){setShowPinSet(true);setPin1("");setPin2("")}} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("set_pin")}</button>
-    </div>`
-    :html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
-      <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_label")} value=${pin1} onInput=${function(e){setPin1(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
-      <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_confirm")} value=${pin2} onInput=${function(e){setPin2(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
-      <div style=${{display:"flex",gap:6}}>
-        <button onClick=${pinSetSave} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save_btn")}</button>
-        <button onClick=${function(){setShowPinSet(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
-      </div>
-    </div>`}
+  ${showSet&&html`<div class="glass fade-in" style=${{margin:"0 16px 16px",padding:"4px 0"}}>
+    ${[
+      {id:"lang",icon:"🌐",label:t("language"),val:lang==="tr"?"🇹🇷 Türkçe":"🇬🇧 English"},
+      {id:"cur",icon:"💱",label:t("currency"),val:curId},
+      {id:"data",icon:"💾",label:t("data"),val:""},
+      {id:"notif",icon:"🔔",label:t("notifications"),val:notifOn?(lang==="tr"?"Açık":"On"):(lang==="tr"?"Kapalı":"Off")},
+      {id:"pin",icon:"🔒",label:t("pin_protect"),val:localStorage.getItem("pk_pin")?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Yok":"None")}
+    ].map(function(sec,i,arr){
+      var open=setSec===sec.id;
+      return html`<div key=${sec.id} style=${{borderBottom:i<arr.length-1?"1px solid var(--border)":"none"}}>
+        <button onClick=${function(){setSetSec(open?null:sec.id)}} style=${{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"13px 18px",background:"none",border:"none",cursor:"pointer",textAlign:"left"}}>
+          <span style=${{fontSize:16,width:22,textAlign:"center"}}>${sec.icon}</span>
+          <span style=${{flex:1,fontSize:13,fontWeight:600,color:"var(--txt)"}}>${sec.label}</span>
+          ${sec.val&&html`<span style=${{fontSize:11,color:"var(--sub)",fontWeight:500,marginRight:4}}>${sec.val}</span>`}
+          <span style=${{fontSize:10,color:"var(--dim)",transform:open?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}>▼</span>
+        </button>
+        ${open&&html`<div class="fade-in" style=${{padding:"4px 18px 14px"}}>
+          ${sec.id==="lang"&&html`<div style=${{display:"flex",gap:6}}>
+            ${["tr","en"].map(function(l){var act=lang===l;return html`<button key=${l} onClick=${function(){setLang(l)}} style=${{flex:1,padding:"9px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer"}}>${l==="tr"?"🇹🇷 Türkçe":"🇬🇧 English"}</button>`})}
+          </div>`}
+          ${sec.id==="cur"&&html`<div style=${{display:"flex",gap:5,flexWrap:"wrap"}}>
+            ${CURR.map(function(c){var act=curId===c.id;return html`<button key=${c.id} onClick=${function(){setCurId(c.id)}} style=${{padding:"6px 11px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:11,fontWeight:600,cursor:"pointer"}}>${c.sym+" "+c.id}</button>`})}
+          </div>`}
+          ${sec.id==="data"&&html`<div style=${{display:"flex",flexDirection:"column",gap:6}}>
+            <button onClick=${exportCSV} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,fontWeight:600,textAlign:"left",cursor:"pointer"}}>${t("download_csv")}</button>
+            <button onClick=${exportJSON} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,fontWeight:600,textAlign:"left",cursor:"pointer"}}>${t("export_json")}</button>
+            <button onClick=${function(){if(fileRef.current)fileRef.current.click()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(6,255,165,0.3)",background:"rgba(6,255,165,0.06)",color:"var(--green)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("restore_json")}</button>
+            <input ref=${fileRef} type="file" accept=".json" onChange=${importJSON} style=${{display:"none"}}/>
+            <button onClick=${function(){window.print()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("print_report")}</button>
+          </div>`}
+          ${sec.id==="notif"&&html`<div style=${{display:"flex",flexDirection:"column",gap:6}}>
+            ${notifOn?html`<div style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",background:"rgba(6,255,165,0.06)",border:"1px solid rgba(6,255,165,0.3)",color:"var(--green)",fontSize:12,fontWeight:700}}>${t("notif_enabled")}</div>
+              <button onClick=${function(){setNotifOn(false)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,fontWeight:600,textAlign:"left",cursor:"pointer"}}>✕ ${lang==="tr"?"Kapat":"Turn Off"}</button>`
+            :html`<button onClick=${requestNotif} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(245,158,11,0.3)",background:"rgba(245,158,11,0.06)",color:"var(--amber)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("notif_enable")}</button>`}
+          </div>`}
+          ${sec.id==="pin"&&html`<div>
+            ${!showPinSet?html`<div style=${{display:"flex",gap:6}}>
+              ${localStorage.getItem("pk_pin")?html`<button onClick=${pinRemove} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("pin_disable")}</button>`:null}
+              <button onClick=${function(){setShowPinSet(true);setPin1("");setPin2("")}} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("set_pin")}</button>
+            </div>`
+            :html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
+              <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_label")} value=${pin1} onInput=${function(e){setPin1(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
+              <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_confirm")} value=${pin2} onInput=${function(e){setPin2(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
+              <div style=${{display:"flex",gap:6}}>
+                <button onClick=${pinSetSave} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save_btn")}</button>
+                <button onClick=${function(){setShowPinSet(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
+              </div>
+            </div>`}
+          </div>`}
+        </div>`}
+      </div>`
+    })}
   </div>`}
 
   <!-- STAT CARDS -->
