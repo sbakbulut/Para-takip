@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v11.0</title>
+<title>Para Kontrol v11.1</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="11.0";
+var APP_VERSION="11.1";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -792,35 +792,264 @@ function sv(d){try{localStorage.setItem(KY,JSON.stringify(d))}catch(e){}}
 function _driveEnabled(){
   try{return!!(localStorage.getItem("pk_drive_url")&&localStorage.getItem("pk_drive_token"))}catch(e){return false}
 }
-/* Token nasil gonderilsin?
-   "query" = eski davranis: URL'de ?token=... (mevcut Apps Script ile uyumlu)
-   "body"  = daha guvenli: token istek govdesinde gider, URL'de/loglarda gorunmez
-             (Apps Script tarafi e.postData.contents icindeki token'i okumali) */
-var DRIVE_TRANSPORT_KEY="pk_drive_transport";
-function driveTransport(){
-  try{return localStorage.getItem(DRIVE_TRANSPORT_KEY)==="body"?"body":"query"}catch(e){return"query"}
-}
+/* ============================================================
+   DRIVE SENKRON — GUVENLI PROTOKOL (v11.1)
+   Token SADECE istek govdesinde gonderilir; URL'de ?token= kullanilmaz.
+   Sunucu tarafi: gas/Code.gs (POST-only, sabit zamanli token kontrolu,
+   min 16 karakter token, hiz limiti, boyut limiti).
+   ============================================================ */
+var DRIVE_LIMIT_BYTES=1000000;            /* 1 MB */
+var DRIVE_SNAPSHOT_KEY="pk_drive_snapshot";
+var DRIVE_MIN_TOKEN_LEN=16;
+
 function driveUrlFor(){
-  var base="";
-  try{base=localStorage.getItem("pk_drive_url")||""}catch(e){return ""}
-  if(!base)return "";
-  if(driveTransport()==="body")return base;
-  var token="";
-  try{token=localStorage.getItem("pk_drive_token")||""}catch(e){}
-  return base+"?token="+encodeURIComponent(token);
+  try{return localStorage.getItem("pk_drive_url")||""}catch(e){return ""}
+}
+function driveTokenGet(){
+  try{return localStorage.getItem("pk_drive_token")||""}catch(e){return ""}
 }
 function driveBody(extra){
   var out=Object.assign({},extra||{});
-  if(driveTransport()==="body"){
-    try{out.token=localStorage.getItem("pk_drive_token")||""}catch(e){}
-  }
+  out.token=driveTokenGet();
   return JSON.stringify(out);
 }
-function driveFetchOptions(extra){
-  var secure=driveTransport()==="body";
-  if(secure)return{method:"POST",cache:"no-store",headers:{"Content-Type":"text/plain;charset=utf-8"},body:driveBody(extra)};
-  return{method:"GET",cache:"no-store"};
+/* Tek giris noktasi: her zaman POST + token govdede */
+function drivePost(action,extra){
+  var payload=Object.assign({action:action},extra||{});
+  return fetch(driveUrlFor(),{
+    method:"POST",
+    cache:"no-store",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:driveBody(payload)
+  });
 }
+
+/* ============================================================
+   UZAK VERI DOGRULAMA (whitelist)
+   Drive'dan gelen JSON asla dogrudan uygulanmaz; yalnizca izin
+   verilen alanlar, tipler ve sinirlar icinde kabul edilir.
+   Amac: CSS injection (categories[].color), tip karmasasi,
+   sinirsiz boyut ve veri kaybi riskini kapatmak.
+   ============================================================ */
+var DRIVE_MAX={
+  expenses:20000,incomeEntries:5000,debts:50,payments:2000,categories:200,
+  templates:200,recurring:200,budgetProfiles:50,aiNotes:20,aiList:8,
+  noteLen:200,labelLen:60,textLen:600,monthKeyLen:7,maxAmount:1e9
+};
+function sStr(v,max){
+  if(v===null||typeof v==="undefined")return "";
+  return String(v).slice(0,max);
+}
+/* kontrol karakterlerini (satir sonu haric) temizle */
+function sText(v,max){
+  return sStr(v,max).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,"");
+}
+function sIcon(v){
+  return sText(v,8).replace(/[\r\n\t]/g,"").trim()||"📦";
+}
+function sId(v){
+  return sStr(v,64).replace(/[^A-Za-z0-9_.:-]/g,"");
+}
+function sColor(v){
+  var c=sStr(v,16).trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(c)?c:null;
+}
+function sNum(v,min,max){
+  var n=(typeof v==="number")?v:parseFloat(v);
+  if(!isFinite(n)||isNaN(n))return null;
+  return Math.max(min,Math.min(max,n));
+}
+function sDateStr(v){
+  var d=sStr(v,32).trim().slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return null;
+  var p=d.split("-"),y=+p[0],m=+p[1],day=+p[2];
+  if(y<2000||y>2100||m<1||m>12||day<1||day>31)return null;
+  return d;
+}
+function sMonthKey(v){
+  var m=sStr(v,16).trim().slice(0,DRIVE_MAX.monthKeyLen);
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(m)?m:null;
+}
+/* Uzak veriyi temizler: {state, dropped, kept} dondurur (gecersizse null) */
+function sanitizeRemote(raw){
+  if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+  var dropped=0,kept=0;
+  var out=ini();
+
+  /* --- Kategoriler (color/icon enjeksiyonuna karsi tek savunma hatti) --- */
+  var cats=[],rawCats=Array.isArray(raw.categories)?raw.categories.slice(0,DRIVE_MAX.categories):[];
+  for(var i=0;i<rawCats.length;i++){
+    var rc=rawCats[i];
+    if(!rc||typeof rc!=="object"){dropped++;continue}
+    var cid=sStr(rc.id,40).replace(/[^A-Za-z0-9_]/g,"");
+    var clabel=sText(rc.label,DRIVE_MAX.labelLen).trim();
+    var ccolor=sColor(rc.color);
+    if(!cid||!clabel||!ccolor){dropped++;continue}
+    cats.push({id:cid,label:clabel,icon:sIcon(rc.icon),color:ccolor});kept++;
+  }
+  if(cats.length===0)cats=DC.map(function(c){return Object.assign({},c)});
+  out.categories=cats;
+  var catIds={};cats.forEach(function(c){catIds[c.id]=true});
+  var fallbackCat=cats[0].id;
+  function catOk(v){var id=sStr(v,40).replace(/[^A-Za-z0-9_]/g,"");return catIds[id]?id:fallbackCat}
+
+  /* --- Harcamalar --- */
+  var ex=[],rawEx=Array.isArray(raw.expenses)?raw.expenses.slice(0,DRIVE_MAX.expenses):[];
+  for(var j=0;j<rawEx.length;j++){
+    var re=rawEx[j];
+    if(!re||typeof re!=="object"){dropped++;continue}
+    var eAmt=sNum(re.amount,-DRIVE_MAX.maxAmount,DRIVE_MAX.maxAmount);
+    var eDate=sDateStr(re.date);
+    if(eAmt===null||!eDate){dropped++;continue}
+    var item={id:sId(re.id)||("ex_"+j),amount:eAmt,category:catOk(re.category),note:sText(re.note,DRIVE_MAX.noteLen),date:eDate,time:sText(re.time,16)};
+    if(re.recurringId)item.recurringId=sId(re.recurringId);
+    if(re.autoRecurring)item.autoRecurring=true;
+    ex.push(item);kept++;
+  }
+  out.expenses=ex;
+
+  /* --- Gelir girişleri --- */
+  var inc=[],rawInc=Array.isArray(raw.incomeEntries)?raw.incomeEntries.slice(0,DRIVE_MAX.incomeEntries):[];
+  for(var k=0;k<rawInc.length;k++){
+    var ri=rawInc[k];
+    if(!ri||typeof ri!=="object"){dropped++;continue}
+    var iAmt=sNum(ri.amount,0,DRIVE_MAX.maxAmount);
+    var iMk=sMonthKey(ri.monthKey);
+    if(iAmt===null||!iMk){dropped++;continue}
+    inc.push({id:sId(ri.id)||("ie_"+k),monthKey:iMk,amount:iAmt,category:sText(ri.category,40),note:sText(ri.note,DRIVE_MAX.noteLen)});kept++;
+  }
+  out.incomeEntries=inc;
+
+  /* --- Eski gelir haritasi (ay -> tutar) --- */
+  var incMap={};
+  if(raw.incomes&&typeof raw.incomes==="object"&&!Array.isArray(raw.incomes)){
+    Object.keys(raw.incomes).slice(0,240).forEach(function(mk){
+      var key=sMonthKey(mk),val=sNum(raw.incomes[mk],0,DRIVE_MAX.maxAmount);
+      if(key&&val!==null)incMap[key]=val;else dropped++;
+    });
+  }
+  out.incomes=incMap;
+
+  /* --- Borçlar --- */
+  var debts=[],rawDebts=Array.isArray(raw.debts)?raw.debts.slice(0,DRIVE_MAX.debts):[];
+  for(var d=0;d<rawDebts.length;d++){
+    var rd=rawDebts[d];
+    if(!rd||typeof rd!=="object"){dropped++;continue}
+    var dTotal=sNum(rd.total,0,DRIVE_MAX.maxAmount);
+    var dPaid=sNum(rd.paid,0,DRIVE_MAX.maxAmount);
+    if(dTotal===null||dPaid===null){dropped++;continue}
+    var pays=[],rawPays=Array.isArray(rd.payments)?rd.payments.slice(0,DRIVE_MAX.payments):[];
+    for(var q=0;q<rawPays.length;q++){
+      var rp=rawPays[q];
+      if(!rp||typeof rp!=="object"){dropped++;continue}
+      var pAmt=sNum(rp.amount,0,DRIVE_MAX.maxAmount),pDate=sDateStr(rp.date);
+      if(pAmt===null||!pDate){dropped++;continue}
+      pays.push({id:sId(rp.id)||("p_"+q),amount:pAmt,date:pDate});
+    }
+    debts.push({id:sId(rd.id)||("d_"+d),label:sText(rd.label,DRIVE_MAX.labelLen).trim()||"Borç",icon:sIcon(rd.icon),total:dTotal,paid:dPaid,payments:pays});
+    kept++;
+  }
+  out.debts=debts.length?debts:ini().debts;
+
+  /* --- Butce limitleri (kategori id -> tutar) --- */
+  var budgets={};
+  if(raw.budgets&&typeof raw.budgets==="object"&&!Array.isArray(raw.budgets)){
+    Object.keys(raw.budgets).slice(0,DRIVE_MAX.categories).forEach(function(bk){
+      var catId=sStr(bk,40).replace(/[^A-Za-z0-9_]/g,"");
+      var val=sNum(raw.budgets[bk],0,DRIVE_MAX.maxAmount);
+      if(catId&&catIds[catId]&&val!==null&&val>0)budgets[catId]=val;else dropped++;
+    });
+  }
+  out.budgets=budgets;
+
+  /* --- Hizli sablonlar --- */
+  var tpls=[],rawTpls=Array.isArray(raw.templates)?raw.templates.slice(0,DRIVE_MAX.templates):[];
+  for(var z=0;z<rawTpls.length;z++){
+    var rt=rawTpls[z];
+    if(!rt||typeof rt!=="object"){dropped++;continue}
+    var tAmt=sNum(rt.amount,0,DRIVE_MAX.maxAmount);
+    if(tAmt===null){dropped++;continue}
+    tpls.push({id:sId(rt.id)||("tp_"+z),category:catOk(rt.category),amount:tAmt,note:sText(rt.note,DRIVE_MAX.noteLen),label:sText(rt.label,DRIVE_MAX.labelLen)});
+    kept++;
+  }
+  out.templates=tpls;
+
+  /* --- Tekrarlayan harcamalar --- */
+  var recs=[],rawRecs=Array.isArray(raw.recurring)?raw.recurring.slice(0,DRIVE_MAX.recurring):[];
+  for(var w=0;w<rawRecs.length;w++){
+    var rr=rawRecs[w];
+    if(!rr||typeof rr!=="object"){dropped++;continue}
+    var rAmt=sNum(rr.amount,0,DRIVE_MAX.maxAmount);
+    var rDay=sNum(rr.dayOfMonth,1,31);
+    if(rAmt===null||rDay===null){dropped++;continue}
+    var paidMonths=[];
+    if(Array.isArray(rr.paidMonths)){
+      rr.paidMonths.slice(0,240).forEach(function(pm){var p=sMonthKey(pm);if(p)paidMonths.push(p)});
+    }
+    recs.push({id:sId(rr.id)||("r_"+w),label:sText(rr.label,DRIVE_MAX.labelLen).trim()||"Ödeme",category:catOk(rr.category),amount:rAmt,dayOfMonth:Math.round(rDay),paidMonths:paidMonths});
+    kept++;
+  }
+  out.recurring=recs;
+
+  /* --- Tasarruf hedefi --- */
+  var goal=sNum((raw.savings||{}).goal,0,DRIVE_MAX.maxAmount);
+  out.savings={goal:(goal===null?0:goal),label:sText((raw.savings||{}).label,DRIVE_MAX.labelLen).trim()||"Tasarruf Hedefi"};
+
+  /* --- Butce profilleri --- */
+  var profs=[],rawProfs=Array.isArray(raw.budgetProfiles)?raw.budgetProfiles.slice(0,DRIVE_MAX.budgetProfiles):[];
+  for(var v=0;v<rawProfs.length;v++){
+    var rpr=rawProfs[v];
+    if(!rpr||typeof rpr!=="object"){dropped++;continue}
+    var pName=sText(rpr.name,DRIVE_MAX.labelLen).trim();
+    if(!pName){dropped++;continue}
+    var pBud={};
+    if(rpr.budgets&&typeof rpr.budgets==="object"&&!Array.isArray(rpr.budgets)){
+      Object.keys(rpr.budgets).slice(0,DRIVE_MAX.categories).forEach(function(bk){
+        var cid2=sStr(bk,40).replace(/[^A-Za-z0-9_]/g,"");
+        var val2=sNum(rpr.budgets[bk],0,DRIVE_MAX.maxAmount);
+        if(cid2&&val2!==null) pBud[cid2]=val2; else dropped++;
+      });
+    }
+    profs.push({id:sId(rpr.id)||("bp_"+v),name:pName,budgets:pBud});
+    kept++;
+  }
+  out.budgetProfiles=profs;
+
+  /* --- AI notlari (metin sinirlari) --- */
+  var notes={};
+  if(raw.aiNotes&&typeof raw.aiNotes==="object"&&!Array.isArray(raw.aiNotes)){
+    Object.keys(raw.aiNotes).slice(0,240).forEach(function(nk){
+      var mk=sMonthKey(nk);
+      if(!mk||!Array.isArray(raw.aiNotes[nk])){dropped++;return}
+      var list=[];
+      raw.aiNotes[nk].slice(0,DRIVE_MAX.aiNotes).forEach(function(rn,idx){
+        if(!rn||typeof rn!=="object"){dropped++;return}
+        var bullets=[],actions=[];
+        if(Array.isArray(rn.bullets))rn.bullets.slice(0,DRIVE_MAX.aiList).forEach(function(b){bullets.push(sText(b,DRIVE_MAX.textLen))});
+        if(Array.isArray(rn.actions))rn.actions.slice(0,DRIVE_MAX.aiList).forEach(function(ac){actions.push(sText(ac,DRIVE_MAX.textLen))});
+        var ts=sNum(rn.ts,0,4102444800000);
+        list.push({id:sId(rn.id)||("ai_"+idx),ts:(ts===null?Date.now():ts),mode:sText(rn.mode,40),headline:sText(rn.headline,DRIVE_MAX.textLen),summary:sText(rn.summary,DRIVE_MAX.textLen),bullets:bullets,actions:actions});
+      });
+      notes[mk]=list;
+    });
+  }
+  out.aiNotes=notes;
+
+  return {state:out,dropped:dropped,kept:kept};
+}
+
+/* Uzak veri "supheli" mi? (yerel veriyi sessizce silmesini engeller)
+   - empty_remote: yerelde kayit varken uzakta hic harcama yok
+   - tiny_remote : uzaktaki toplam, yerelin %10'undan kucuk */
+function remoteSuspicious(remote,local){
+  var lE=((local&&local.expenses)||[]).length,rE=((remote&&remote.expenses)||[]).length;
+  if(lE>0&&rE===0)return "empty_remote";
+  var lSum=((local&&local.expenses)||[]).reduce(function(s,e){return s+(+e.amount||0)},0);
+  var rSum=((remote&&remote.expenses)||[]).reduce(function(s,e){return s+(+e.amount||0)},0);
+  if(lSum>0&&rSum<lSum*0.1)return "tiny_remote";
+  return "";
+}
+
 function App(){
   var _th=h(function(){return localStorage.getItem("pk_theme")||(window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}),theme=_th[0],setTheme=_th[1];
   var _lang=h(function(){return localStorage.getItem("pk_lang")||"tr"}),lang=_lang[0],setLang=_lang[1];
@@ -911,7 +1140,8 @@ function App(){
   /* ==== Drive Sync state'leri ==== */
   var _driveUrl=h(function(){try{return localStorage.getItem("pk_drive_url")||""}catch(e){return""}}),driveUrl=_driveUrl[0],setDriveUrl=_driveUrl[1];
   var _driveToken=h(function(){try{return localStorage.getItem("pk_drive_token")||""}catch(e){return""}}),driveToken=_driveToken[0],setDriveToken=_driveToken[1];
-  var _driveTr=h(driveTransport()),driveTr=_driveTr[0],setDriveTr=_driveTr[1];
+  var _drivePending=h(null),drivePending=_drivePending[0],setDrivePending=_drivePending[1];
+  var _driveNotice=h(""),driveNotice=_driveNotice[0],setDriveNotice=_driveNotice[1];
   var _syncStatus=h("idle"),syncStatus=_syncStatus[0],setSyncStatus=_syncStatus[1];
   var _lastSyncTs=h(0),lastSyncTs=_lastSyncTs[0],setLastSyncTs=_lastSyncTs[1];
   var _syncDraftUrl=h(function(){try{return localStorage.getItem("pk_drive_url")||""}catch(e){return""}}),syncDraftUrl=_syncDraftUrl[0],setSyncDraftUrl=_syncDraftUrl[1];
@@ -943,35 +1173,82 @@ function App(){
   var _driveInterval=null;
   var _driveBooted=false;
 
+  /* Uygulamadan once yerel anlik goruntu (geri donus icin) */
+  function driveSnapshotSave(state,by){
+    try{localStorage.setItem(DRIVE_SNAPSHOT_KEY,JSON.stringify({ts:Date.now(),by:by||"pull",data:JSON.stringify(state)}))}catch(e){}
+  }
+  function applyRemote(state){
+    driveSnapshotSave(S,"pull");
+    if(state._demo)delete state._demo;
+    setS(state);
+  }
+  function driveNoticeText(txt){setDriveNotice(txt||"")}
+
   async function drivePull(silent){
-    if(!_driveEnabled())return;
-    if(syncStatus==="syncing")return;
+    if(!_driveEnabled())return false;
+    if(syncStatus==="syncing")return false;
     if(!silent)setSyncStatus("syncing");
     try{
-      var res=await fetch(driveUrlFor(),driveFetchOptions({action:"get"}));
+      var res=await drivePost("get");
       var text=await res.text();
-      try{
-        var json=JSON.parse(text);
-      }catch(parseErr){
-        if(typeof console!=="undefined")console.warn("[drivePull] non-JSON response:",text.slice(0,200));
+      if(text.length>DRIVE_LIMIT_BYTES+200000){
+        setSyncStatus("error");
+        driveNoticeText(lang==="tr"?"Drive yanıtı çok büyük, güvenlik için uygulanmadı.":"Drive response too large; not applied for safety.");
+        return false;
+      }
+      var json=null;
+      try{json=JSON.parse(text)}catch(parseErr){
+        if(typeof console!=="undefined")console.warn("[drivePull] non-JSON response (HTTP "+res.status+")");
         setSyncStatus("error");return false;
       }
       if(json.ok&&typeof json.data==="string"&&json.data){
-        try{
-          var data=JSON.parse(json.data);
-          if(data&&Array.isArray(data.expenses)){
-            if(data._demo)delete data._demo; /* demo bayragi Drive'dan gelmez */
-            setS(Object.assign(ini(),data));
-            setLastSyncTs(Date.now());
-            setSyncStatus("ok");
-            return true;
-          }
-        }catch(e){}
+        var parsed=null;
+        try{parsed=JSON.parse(json.data)}catch(e){parsed=null}
+        var clean=parsed?sanitizeRemote(parsed):null;
+        if(!clean){
+          setSyncStatus("error");
+          driveNoticeText(lang==="tr"?"Drive'daki veri okunamadı/geçersiz — yerel verin korundu.":"Drive data is unreadable/invalid — local data kept.");
+          return false;
+        }
+        if(clean.dropped>0){
+          driveNoticeText((lang==="tr"?"Güvenlik: ":"Security: ")+clean.dropped+(lang==="tr"?" geçersiz kayıt atlandı.":" invalid record(s) were skipped."));
+        }
+        var why=remoteSuspicious(clean.state,S);
+        if(why){
+          setDrivePending(clean.state);
+          setSyncStatus("conflict");
+          driveNoticeText((lang==="tr"?"Uzaktaki veri boş/çok küçük görünüyor":"Remote data looks empty/too small")+" ("+why+"). "+(lang==="tr"?"Yerel verin korundu; ne yapmak istediğini seç.":"Local data kept; choose what to do."));
+          return false;
+        }
+        applyRemote(clean.state);
+        setLastSyncTs(Date.now());
+        setSyncStatus("ok");
+        return true;
       }
       if(json.error==="unauthorized"){setSyncStatus("unauth");return false}
+      if(json.error==="server_token_missing"){
+        setSyncStatus("unauth");
+        driveNoticeText(lang==="tr"?"Apps Script'te token tanımlı değil (setToken ile kur).":"No token defined in Apps Script (run setToken).");
+        return false;
+      }
+      if(json.error==="method_not_allowed"){
+        setSyncStatus("error");
+        driveNoticeText(lang==="tr"?"Script güvenli protokolü desteklemiyor — gas/Code.gs ile güncelle.":"Script does not support the secure protocol — update with gas/Code.gs.");
+        return false;
+      }
+      if(json.error==="rate_limited"){
+        setSyncStatus("error");
+        driveNoticeText(lang==="tr"?"Script hız limiti aşıldı (dakikada 60). Kısa bir süre bekle.":"Script rate limit reached (60/min). Wait a moment.");
+        return false;
+      }
+      if(json.error==="too_large"){
+        setSyncStatus("error");
+        driveNoticeText(lang==="tr"?"Veri 1 MB sınırını aşıyor, gönderilemedi.":"Data exceeds the 1 MB limit, not sent.");
+        return false;
+      }
       setSyncStatus("error");return false;
     }catch(e){
-      if(typeof console!=="undefined")console.warn("[drivePull] network error:",String(e));
+      if(typeof console!=="undefined")console.warn("[drivePull] network error:",String(e&&e.message?e.message:e));
       setSyncStatus(silent?"idle":"offline");
       return false;
     }
@@ -979,18 +1256,20 @@ function App(){
 
   async function drivePush(){
     if(!_driveEnabled())return;
+    if(S._demo){driveNoticeText(lang==="tr"?"Demo veriler Drive'a gönderilmez.":"Demo data is not pushed to Drive.");return}
+    var payload=JSON.stringify(S);
+    if(payload.length>DRIVE_LIMIT_BYTES){
+      setSyncStatus("error");
+      driveNoticeText(lang==="tr"?"Veri 1 MB sınırını aşıyor — gönderilmedi.":"Data exceeds the 1 MB limit — not sent.");
+      return;
+    }
     setSyncStatus("syncing");
     try{
-      var res=await fetch(driveUrlFor(),{
-        method:"POST",
-        headers:{"Content-Type":"text/plain;charset=utf-8"},
-        body:driveBody({action:"put",data:JSON.stringify(S)})
-      });
+      var res=await drivePost("put",{data:payload});
       var text=await res.text();
-      try{
-        var json=JSON.parse(text);
-      }catch(parseErr){
-        if(typeof console!=="undefined")console.warn("[drivePush] non-JSON response (HTTP "+res.status+"):",text.slice(0,300));
+      var json=null;
+      try{json=JSON.parse(text)}catch(parseErr){
+        if(typeof console!=="undefined")console.warn("[drivePush] non-JSON response (HTTP "+res.status+")");
         setSyncStatus("error");return;
       }
       if(json.ok){
@@ -999,9 +1278,12 @@ function App(){
       }else{
         if(typeof console!=="undefined")console.warn("[drivePush] error:",json.error);
         setSyncStatus(json.error==="unauthorized"?"unauth":"error");
+        if(json.error==="unauthorized")driveNoticeText(lang==="tr"?"Token reddedildi. Apps Script token'ı ile uygulamadaki token aynı mı? (min 16 karakter)":"Token rejected. Does the app token match the Apps Script token? (min 16 chars)");
+        else if(json.error==="too_large")driveNoticeText(lang==="tr"?"Veri 1 MB sınırını aşıyor.":"Data exceeds the 1 MB limit.");
+        else if(json.error==="rate_limited")driveNoticeText(lang==="tr"?"Script hız limiti aşıldı, biraz bekle.":"Script rate limit reached, wait a moment.");
       }
     }catch(e){
-      if(typeof console!=="undefined")console.warn("[drivePush] network error:",String(e));
+      if(typeof console!=="undefined")console.warn("[drivePush] network error:",String(e&&e.message?e.message:e));
       setSyncStatus("offline");
     }
   }
@@ -1012,22 +1294,90 @@ function App(){
     _drivePushTimer=setTimeout(drivePush,2000);
   }
 
+  /* ---- Kullanici eylemleri ---- */
+  function driveApplyPending(){
+    if(!drivePending)return;
+    applyRemote(drivePending);
+    setDrivePending(null);
+    setSyncStatus("ok");
+    driveNoticeText(lang==="tr"?"Drive'daki veri uygulandı.":"Drive data applied.");
+  }
+  function driveDismissPending(){
+    setDrivePending(null);
+    setSyncStatus("idle");
+    driveNoticeText(lang==="tr"?"Uzaktaki veri yok sayıldı, yerel verin korundu.":"Remote data ignored; local data kept.");
+  }
+  function driveOverwriteRemote(){
+    setDrivePending(null);
+    driveNoticeText("");
+    drivePush();
+  }
+  /* Uygulamadan onceki yerel anlik goruntuye don */
+  function driveRestoreSnapshot(){
+    var snap=null;
+    try{snap=JSON.parse(localStorage.getItem(DRIVE_SNAPSHOT_KEY)||"null")}catch(e){}
+    if(!snap||!snap.data){driveNoticeText(lang==="tr"?"Geri dönülecek anlık görüntü yok.":"No snapshot to restore.");return}
+    var parsed=null;
+    try{parsed=JSON.parse(snap.data)}catch(e){}
+    var clean=parsed?sanitizeRemote(parsed):null;
+    if(!clean){driveNoticeText(lang==="tr"?"Anlık görüntü okunamadı.":"Snapshot unreadable.");return}
+    setS(clean.state);
+    setDrivePending(null);
+    setSyncStatus("idle");
+    driveNoticeText((lang==="tr"?"Yerel anlık görüntü geri yüklendi: ":"Local snapshot restored: ")+new Date(snap.ts).toLocaleString(t("locale")));
+  }
+
   function driveSaveConfig(url,token){
     try{
       localStorage.setItem("pk_drive_url",url);
       localStorage.setItem("pk_drive_token",token);
       setDriveUrl(url);setDriveToken(token);
+      try{localStorage.removeItem("pk_drive_transport")}catch(e){}
+      driveNoticeText("");
+      setDrivePending(null);
       setTimeout(drivePush,400);
       /* Config ilk kez girildiyse interval+ilk pull'u başlat */
       if(!_driveBooted){
         _driveInterval=setInterval(function(){drivePull(true)},30000);
         _driveBooted=true;
         setTimeout(function(){drivePull(true)},800);
-      }else{
-        /* Zaten boot edilmiş — sadece ilk push tetiklendi, yeter */
       }
       return true;
     }catch(e){return false}
+  }
+
+  /* Protokol/kurulum testi: veri YAZMAZ ve gercek token'i URL'de gondermez */
+  async function driveTest(){
+    var base=driveUrlFor();
+    if(!base){driveNoticeText(lang==="tr"?"Önce Web App URL'ini gir.":"Enter the Web App URL first.");return}
+    setSyncStatus("syncing");
+    var L=[];
+    function flush(){setDriveNotice(L.join("\n"))}
+    flush();
+    try{
+      var p=await drivePost("ping");
+      var pt=await p.text();
+      var pj=null;try{pj=JSON.parse(pt)}catch(e){}
+      if(pj&&pj.ok)L.push("✓ "+(lang==="tr"?"Güvenli protokol çalışıyor (script rev ":"Secure protocol works (script rev ")+(pj.rev||"?")+", "+(pj.hasData?(lang==="tr"?"kayıt var":"has data"):(lang==="tr"?"kayıt yok":"no data"))+")");
+      else if(pj&&pj.error==="unauthorized")L.push("✗ ping: "+(lang==="tr"?"token reddedildi — apps script ve uygulama token'ı aynı mı?":"token rejected — do the tokens match?"));
+      else if(pj&&pj.error==="server_token_missing")L.push("✗ ping: "+(lang==="tr"?"Apps Script'te token tanımlı değil (setToken)":"no token in Apps Script (run setToken)"));
+      else if(pj&&pj.error)L.push("✗ ping: "+pj.error);
+      else L.push("✗ ping: HTTP "+p.status+" "+String(pt).slice(0,120));
+    }catch(e){L.push("✗ ping "+(lang==="tr"?"bağlantı hatası: ":"connection error: ")+String(e&&e.message?e.message:e))}
+    flush();
+    /* Eski zayif yol (URL'de token) hala acik mi? Gercek token GONDERILMEZ. */
+    try{
+      var lg=await fetch(base+"?token=__probe__",{method:"GET",cache:"no-store"});
+      var lt=await lg.text();
+      var lj=null;try{lj=JSON.parse(lt)}catch(e){}
+      if(lg.status===405||(lj&&lj.error==="method_not_allowed"))L.push("✓ "+(lang==="tr"?"URL'de token yolu kapalı (güvenli)":"URL-token path is closed (secure)"));
+      else if(lj&&lj.error==="unauthorized")L.push("⚠ "+(lang==="tr"?"GÜVENLİK: script hâlâ URL'deki token'ı kabul ediyor — gas/Code.gs ile güncelle":"SECURITY: script still accepts tokens in the URL — update with gas/Code.gs"));
+      else L.push("? "+(lang==="tr"?"Eski yol yanıtı: HTTP ":"Legacy path response: HTTP ")+lg.status+" "+String(lt).slice(0,80));
+    }catch(e){
+      L.push("• "+(lang==="tr"?"Eski yol ölçülemedi (CORS) — istemci artık URL'de token göndermiyor":"Legacy path not measurable (CORS) — the app no longer sends tokens in URLs"));
+    }
+    flush();
+    setSyncStatus("idle");
   }
 
   /* ==== Voice Chat (sesli sohbet) ==== */
@@ -1571,28 +1921,12 @@ function App(){
     setTimeout(tryInitial,800);
     /* Periyodik pull — her 30 sn */
     _driveInterval=setInterval(function(){drivePull(true)},30000);
-    /* DEBUG: ?debug=1 URL'inde ise otomatik GET/POST testleri yap */
+    /* DEBUG: ?debug=1 → protokol/kurulum teshisi (veri YAZMAZ, token'i URL'de gondermez) */
     if(typeof window!=="undefined"){
-      var _params=new URLSearchParams(window.location.search);
-      if(_params.get("debug")==="1"){
-        setTimeout(async function(){
-          var u=driveUrlFor();
-          var secureTr=driveTransport()==="body";
-          var getMsg=(secureTr?"POST(get) ❌ hiç denenmedi":"GET ❌ hiç denenmedi");
-          try{
-            var getRes=await fetch(u,driveFetchOptions({action:"get"}));
-            var getText=await getRes.text();
-            getMsg="GET ✅ HTTP "+getRes.status+"\n"+getText.slice(0,250);
-          }catch(getErr){getMsg="GET ❌ "+String(getErr);}
-          var postMsg="POST ❌ hiç denenmedi";
-          try{
-            var postRes=await fetch(u,{method:"POST",headers:{"Content-Type":"text/plain"},body:driveBody({action:"put",data:JSON.stringify({debug:true,ts:Date.now()})})});
-            var postText=await postRes.text();
-            postMsg="POST ✅ HTTP "+postRes.status+"\n"+postText.slice(0,250);
-          }catch(postErr){postMsg="POST ❌ "+String(postErr);}
-          alert("🔍 Drive Sync Debug\n\n"+getMsg+"\n\n──────────\n\n"+postMsg);
-        },2000);
-      }
+      try{
+        var _params=new URLSearchParams(window.location.search);
+        if(_params.get("debug")==="1")setTimeout(function(){driveTest()},2000);
+      }catch(e){}
     }
     return function(){if(_driveInterval){clearInterval(_driveInterval);_driveInterval=null;_driveBooted=false}}
   },[]);
@@ -2213,9 +2547,9 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
         <p style=${{fontSize:12,color:"var(--sub)",paddingLeft:2,fontWeight:600,marginTop:6,letterSpacing:"0.01em"}}>${lang==="tr"?"Tutarı yaz, kategori seç, kaydet.":"Type amount, choose category, save."}</p>
       </div>
       <div style=${{display:"flex",gap:8,alignItems:"center",paddingTop:4}}>
-        ${driveUrl?html`<div title=${syncStatus==="ok"?(lang==="tr"?"Drive ile senkron":"In sync with Drive"):syncStatus==="syncing"?(lang==="tr"?"Senkronize ediliyor…":"Syncing…"):syncStatus==="offline"?(lang==="tr"?"Çevrimdışı — bağlantı gelince devam":"Offline — will resume"):syncStatus==="unauth"?(lang==="tr"?"Token hatalı":"Bad token"):(lang==="tr"?"Beklemede":"Idle")} style=${{display:"flex",alignItems:"center",gap:4,padding:"4px 8px",borderRadius:999,background:syncStatus==="ok"?"rgba(6,255,165,0.12)":syncStatus==="syncing"?"rgba(59,130,246,0.12)":syncStatus==="unauth"||syncStatus==="error"?"rgba(255,68,102,0.12)":"rgba(245,158,11,0.12)",border:"1px solid "+(syncStatus==="ok"?"rgba(6,255,165,0.3)":syncStatus==="syncing"?"rgba(59,130,246,0.3)":syncStatus==="unauth"||syncStatus==="error"?"rgba(255,68,102,0.3)":"rgba(245,158,11,0.3)"),fontSize:10,fontWeight:700,color:syncStatus==="ok"?"var(--green)":syncStatus==="syncing"?"var(--blue2)":syncStatus==="unauth"||syncStatus==="error"?"var(--red)":"var(--amber)"}}>
-          <span style=${{fontSize:12,lineHeight:1,display:"inline-block",animation:syncStatus==="syncing"?"spin 0.9s linear infinite":"none"}}>${syncStatus==="ok"?"✓":syncStatus==="syncing"?"⟳":syncStatus==="unauth"||syncStatus==="error"?"⚠":"☁"}</span>
-          <span>${syncStatus==="ok"?(lang==="tr"?"Senkron":"Sync"):syncStatus==="syncing"?(lang==="tr"?"Eşitleniyor":"Syncing"):syncStatus==="unauth"?(lang==="tr"?"Token?":"Token?"):(lang==="tr"?"Çevrimdışı":"Offline")}</span>
+        ${driveUrl?html`<div title=${syncStatus==="ok"?(lang==="tr"?"Drive ile senkron":"In sync with Drive"):syncStatus==="syncing"?(lang==="tr"?"Senkronize ediliyor…":"Syncing…"):syncStatus==="offline"?(lang==="tr"?"Çevrimdışı — bağlantı gelince devam":"Offline — will resume"):syncStatus==="unauth"?(lang==="tr"?"Token hatalı":"Bad token"):syncStatus==="conflict"?(lang==="tr"?"Uzak veri şüpheli — ayarlardan onayla":"Remote data suspicious — confirm in settings"):(lang==="tr"?"Beklemede":"Idle")} style=${{display:"flex",alignItems:"center",gap:4,padding:"4px 8px",borderRadius:999,background:syncStatus==="ok"?"rgba(6,255,165,0.12)":syncStatus==="syncing"?"rgba(59,130,246,0.12)":syncStatus==="unauth"||syncStatus==="error"?"rgba(255,68,102,0.12)":"rgba(245,158,11,0.12)",border:"1px solid "+(syncStatus==="ok"?"rgba(6,255,165,0.3)":syncStatus==="syncing"?"rgba(59,130,246,0.3)":syncStatus==="unauth"||syncStatus==="error"?"rgba(255,68,102,0.3)":"rgba(245,158,11,0.3)"),fontSize:10,fontWeight:700,color:syncStatus==="ok"?"var(--green)":syncStatus==="syncing"?"var(--blue2)":syncStatus==="unauth"||syncStatus==="error"?"var(--red)":"var(--amber)"}}>
+          <span style=${{fontSize:12,lineHeight:1,display:"inline-block",animation:syncStatus==="syncing"?"spin 0.9s linear infinite":"none"}}>${syncStatus==="ok"?"✓":syncStatus==="syncing"?"⟳":(syncStatus==="unauth"||syncStatus==="error"||syncStatus==="conflict")?"⚠":"☁"}</span>
+          <span>${syncStatus==="ok"?(lang==="tr"?"Senkron":"Sync"):syncStatus==="syncing"?(lang==="tr"?"Eşitleniyor":"Syncing"):syncStatus==="unauth"?(lang==="tr"?"Token?":"Token?"):syncStatus==="conflict"?(lang==="tr"?"Onay?":"Confirm?"):(lang==="tr"?"Çevrimdışı":"Offline")}</span>
         </div>`:null}
         <button onClick=${function(){setTheme(dk?"light":"dark")}} style=${{width:44,height:26,borderRadius:13,background:dk?"rgba(255,255,255,0.1)":"rgba(0,0,0,0.1)",position:"relative",border:"1px solid var(--border)",cursor:"pointer"}}>
           <div style=${{width:20,height:20,borderRadius:10,background:dk?"rgba(59,130,246,0.9)":"#fff",position:"absolute",top:2,left:dk?2:20,transition:"left 0.25s cubic-bezier(0.34,1.56,0.64,1)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,boxShadow:"0 2px 8px rgba(0,0,0,0.3)"}}>${dk?"🌙":"☀️"}</div>
@@ -2292,23 +2626,36 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
           ${sec.id==="drive"&&html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
             <input class="inp-field" type="text" placeholder=${t("drive_url_ph")} value=${syncDraftUrl} onInput=${function(e){setSyncDraftUrl(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
             <input class="inp-field" type="text" placeholder=${t("drive_token_ph")} value=${syncDraftToken} onInput=${function(e){setSyncDraftToken(e.target.value)}} style=${{fontSize:12,fontFamily:"var(--mono)"}}/>
+            <div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.45}}>${lang==="tr"?"🛡️ Güvenli protokol: token yalnızca istek gövdesinde gönderilir, URL'de asla görünmez. Apps Script tarafı için depodaki gas/Code.gs dosyasını kullan (POST-only, sabit zamanlı token kontrolü, hız limiti).":"🛡️ Secure protocol: the token travels only in the request body, never in the URL. Use gas/Code.gs for the Apps Script side (POST-only, constant-time token check, rate limit)."}</div>
+            ${syncDraftToken&&syncDraftToken.length<DRIVE_MIN_TOKEN_LEN&&html`<div style=${{fontSize:9,color:"var(--amber)",fontWeight:700,lineHeight:1.45}}>⚠ ${lang==="tr"?"Token en az "+DRIVE_MIN_TOKEN_LEN+" karakter olmalı (şu an "+syncDraftToken.length+").":"Token must be at least "+DRIVE_MIN_TOKEN_LEN+" characters (now "+syncDraftToken.length+")."}</div>`}
             <div style=${{display:"flex",gap:6}}>
-              ${[{id:"query",l:lang==="tr"?"🔗 URL'de token (uyumlu)":"🔗 Token in URL (compatible)"},{id:"body",l:lang==="tr"?"🛡️ Gövdede token (güvenli)":"🛡️ Token in body (safer)"}].map(function(tr){var act=driveTr===tr.id;return html`<button key=${tr.id} onClick=${function(){setDriveTr(tr.id);try{localStorage.setItem(DRIVE_TRANSPORT_KEY,tr.id)}catch(e){}}} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${tr.l}</button>`})}
+              <button onClick=${function(){
+                if(!syncDraftUrl.trim()||!syncDraftToken.trim())return;
+                if(syncDraftToken.trim().length<DRIVE_MIN_TOKEN_LEN&&!confirm(lang==="tr"?"Token "+DRIVE_MIN_TOKEN_LEN+" karakterden kısa — kaba kuvvet saldırısına açık. Yine de kaydetmek istiyor musun?":"Token is shorter than "+DRIVE_MIN_TOKEN_LEN+" characters — brute-forceable. Save anyway?"))return;
+                if(driveSaveConfig(syncDraftUrl.trim(),syncDraftToken.trim())){
+                  setSyncDraftUrl("");setSyncDraftToken("");
+                }
+              }} style=${{flex:1,padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#0ea5e9,#6366f1)",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("drive_save")}</button>
+              <button onClick=${function(){driveTest()}} disabled=${syncStatus==="syncing"} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.35)",background:"rgba(99,102,241,0.08)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:syncStatus==="syncing"?"wait":"pointer",flexShrink:0}}>${lang==="tr"?"📡 Test":"📡 Test"}</button>
             </div>
-            <div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.45}}>${lang==="tr"?"\"URL'de token\" mevcut Apps Script ile çalışır ama token tarayıcı geçmişine/loglara düşebilir. \"Gövdede token\" daha güvenli; Apps Script'in e.postData içindeki token'ı okuması gerekir (bkz. README).":"\"Token in URL\" works with the existing Apps Script but the secret may end up in browser history/logs. \"Token in body\" is safer; your Apps Script must read the token from e.postData (see README)."}</div>
-            <button onClick=${function(){
-              if(!syncDraftUrl.trim()||!syncDraftToken.trim())return;
-              driveSaveConfig(syncDraftUrl.trim(),syncDraftToken.trim());
-              setSyncDraftUrl("");setSyncDraftToken("");
-            }} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#0ea5e9,#6366f1)",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("drive_save")}</button>
+            ${driveNotice&&html`<div style=${{padding:"9px 12px",borderRadius:"var(--radius-xs)",background:"rgba(99,102,241,0.06)",border:"1px solid rgba(99,102,241,0.22)",color:"var(--txt)",fontSize:10,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>${driveNotice}</div>`}
+            ${drivePending&&html`<div style=${{padding:"11px 12px",borderRadius:"var(--radius-xs)",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",display:"flex",flexDirection:"column",gap:7}}>
+              <div style=${{fontSize:10,color:"var(--amber)",fontWeight:700,lineHeight:1.5}}>⚠ ${lang==="tr"?"Drive'daki veri şüpheli (boş/çok küçük). Yerel verin korundu — ne yapmak istersin?":"Drive data looks suspicious (empty/too small). Local data was kept — what do you want to do?"}</div>
+              <div style=${{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick=${driveApplyPending} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.35)",background:"rgba(255,68,102,0.08)",color:"var(--red)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Uzağı uygula":"Apply remote"}</button>
+                <button onClick=${driveOverwriteRemote} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(6,255,165,0.3)",background:"rgba(6,255,165,0.06)",color:"var(--green)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Yereli gönder":"Push local"}</button>
+                <button onClick=${driveDismissPending} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Yok say":"Ignore"}</button>
+              </div>
+            </div>`}
             ${driveUrl?html`<div style=${{padding:"8px 12px",borderRadius:"var(--radius-xs)",background:"rgba(6,255,165,0.06)",border:"1px solid rgba(6,255,165,0.3)",fontSize:10,color:"var(--green)",display:"flex",alignItems:"center",gap:8}}>
-              <span style=${{fontSize:14,lineHeight:1}}>${syncStatus==="syncing"?"⟳":syncStatus==="ok"?"✓":syncStatus==="offline"?"⚠":syncStatus==="unauth"?"⚠":"●"}</span>
+              <span style=${{fontSize:14,lineHeight:1}}>${syncStatus==="syncing"?"⟳":syncStatus==="ok"?"✓":(syncStatus==="offline"||syncStatus==="unauth"||syncStatus==="conflict")?"⚠":"●"}</span>
               <div style=${{flex:1}}>
-                <div style=${{fontWeight:700}}>${lang==="tr"?(syncStatus==="syncing"?"Senkronize ediliyor…":syncStatus==="ok"?"Drive ile senkron":syncStatus==="offline"?"Çevrimdışı — bağlantı gelince devam":syncStatus==="unauth"?"Token hatalı, kontrol et":"Beklemede"):(syncStatus==="syncing"?"Syncing…":syncStatus==="ok"?"In sync with Drive":syncStatus==="offline"?"Offline — will resume":syncStatus==="unauth"?"Bad token, check settings":"Idle")}</div>
+                <div style=${{fontWeight:700}}>${lang==="tr"?(syncStatus==="syncing"?"Senkronize ediliyor…":syncStatus==="ok"?"Drive ile senkron":syncStatus==="offline"?"Çevrimdışı — bağlantı gelince devam":syncStatus==="unauth"?"Token hatalı, kontrol et":syncStatus==="conflict"?"Uzak veri şüpheli — onay bekliyor":"Beklemede"):(syncStatus==="syncing"?"Syncing…":syncStatus==="ok"?"In sync with Drive":syncStatus==="offline"?"Offline — will resume":syncStatus==="unauth"?"Bad token, check settings":syncStatus==="conflict"?"Remote data suspicious — awaiting confirmation":"Idle")}</div>
                 <div style=${{fontSize:9,color:"var(--sub)",marginTop:2}}>${lastSyncTs>0?(lang==="tr"?"Son: ":"Last: ")+new Date(lastSyncTs).toLocaleTimeString(lang==="tr"?"tr-TR":"en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit"}):(lang==="tr"?"Henüz senkron yapılmadı":"Not synced yet")}</div>
               </div>
             </div>
-            <button onClick=${function(){try{localStorage.removeItem("pk_drive_url");localStorage.removeItem("pk_drive_token");setDriveUrl("");setDriveToken("");if(_driveInterval){clearInterval(_driveInterval);_driveInterval=null;_driveBooted=false};setSyncStatus("idle")}catch(e){}}} style=${{padding:"6px 10px",borderRadius:999,border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:10,fontWeight:600,cursor:"pointer",alignSelf:"flex-start"}}>${lang==="tr"?"Bağlantıyı Kes":"Disconnect"}</button>`:null}
+            ${(function(){var has=false;try{has=!!localStorage.getItem(DRIVE_SNAPSHOT_KEY)}catch(e){}return has})()&&html`<button onClick=${driveRestoreSnapshot} style=${{padding:"6px 10px",borderRadius:999,border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer",alignSelf:"flex-start"}}>${lang==="tr"?"↩ Son senkron öncesine dön":"↩ Revert to pre-sync"}</button>`}
+            <button onClick=${function(){try{localStorage.removeItem("pk_drive_url");localStorage.removeItem("pk_drive_token");localStorage.removeItem("pk_drive_transport");setDriveUrl("");setDriveToken("");if(_driveInterval){clearInterval(_driveInterval);_driveInterval=null;_driveBooted=false};setSyncStatus("idle");setDrivePending(null);setDriveNotice("")}catch(e){}}} style=${{padding:"6px 10px",borderRadius:999,border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:10,fontWeight:600,cursor:"pointer",alignSelf:"flex-start"}}>${lang==="tr"?"Bağlantıyı Kes":"Disconnect"}</button>`:null}
           </div>`}
           ${sec.id==="notif"&&html`<div style=${{display:"flex",flexDirection:"column",gap:6}}>
             ${notifOn?html`<div style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",background:"rgba(6,255,165,0.06)",border:"1px solid rgba(6,255,165,0.3)",color:"var(--green)",fontSize:12,fontWeight:700}}>${t("notif_enabled")}</div>
