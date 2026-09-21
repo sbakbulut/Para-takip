@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v10</title>
+<title>Para Kontrol v11.0</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -265,14 +265,55 @@ var html=htm.bind(React.createElement);
 var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 
 /* ============================================================
-   MiniMax M3 AI ENTEGRASYONU
+   SURUM
    ============================================================ */
+var APP_VERSION="11.0";
+
+/* ============================================================
+   DeepSeek V4.1 Flash AI ENTEGRASYONU
+   API: https://api.deepseek.com (OpenAI uyumlu)
+   ============================================================ */
+var AI_KEY="pk_ai_key";
+var AI_KEY_MODE_KEY="pk_ai_key_mode"; /* "device" (kalici) | "session" (sekme kapaninca silinir) */
+var AI_THINK_KEY="pk_ai_think";       /* "1" = derin dusunme (thinking) acik */
+/* Key okuma: once cihaz (localStorage), sonra oturum (sessionStorage).
+   Hic key yoksa kullanicinin son tercih ettigi mod doner. */
+function aiKeyLoad(){
+  var pref="device";
+  try{pref=localStorage.getItem(AI_KEY_MODE_KEY)||"device"}catch(e){}
+  try{
+    var dev="";
+    try{dev=localStorage.getItem(AI_KEY)||""}catch(e){}
+    if(dev)return{key:dev,mode:"device"};
+  }catch(e){}
+  try{
+    var ses=sessionStorage.getItem(AI_KEY)||"";
+    if(ses)return{key:ses,mode:"session"};
+  }catch(e){}
+  return{key:"",mode:pref==="session"?"session":"device"};
+}
+/* Key yazma: sadece secilen alanda tutulur, digeri temizlenir; mod tercihi hatirlanir */
+function aiKeyStore(key,mode){
+  var m=(mode==="session")?"session":"device";
+  try{localStorage.setItem(AI_KEY_MODE_KEY,m)}catch(e){}
+  try{localStorage.removeItem(AI_KEY)}catch(e){}
+  try{sessionStorage.removeItem(AI_KEY)}catch(e){}
+  if(!key)return true;
+  try{
+    if(m==="session"){sessionStorage.setItem(AI_KEY,key);return true}
+    localStorage.setItem(AI_KEY,key);return true;
+  }catch(e){return false}
+}
+var _aiKeyInit=aiKeyLoad();
 var AI_CONFIG={
-  apiKey:(function(){try{return localStorage.getItem("pk_ai_key")||""}catch(e){return""}})(),
-  endpoint:"https://api.minimax.io/v1/chat/completions",
-  ttsEndpoint:"https://api.minimax.io/v1/t2a_v2",
-  model:"MiniMax-M3",
-  ttsModel:"speech-2.8-hd"
+  provider:"deepseek",
+  apiKey:_aiKeyInit.key,
+  keyMode:_aiKeyInit.mode,
+  endpoint:"https://api.deepseek.com/chat/completions",
+  model:"deepseek-flash",
+  modelLabel:"DeepSeek V4.1 Flash",
+  deepThink:(function(){try{return localStorage.getItem(AI_THINK_KEY)==="1"}catch(e){return false}})(),
+  timeoutMs:30000
 };
 
 function buildSystemPrompt(lang){
@@ -303,50 +344,79 @@ function buildSystemPrompt(lang){
   "- Bilmiyorsan acikca soyle, asla uydurma rakam yazma.";
 }
 
-async function callMiniMaxAI(messages,lang){
+async function callDeepSeekAI(messages,lang){
   if(!AI_CONFIG.apiKey){
-    var msg=(lang==="en")?"API key not set. Go to Settings → MiniMax API Key.":"API key ayarlı değil. Ayarlar → MiniMax API Key'den ekle.";
+    var msg=(lang==="en")?"API key not set. Go to Settings → DeepSeek API Key.":"API key ayarlı değil. Ayarlar → DeepSeek API Key'den ekle.";
     throw new Error(msg);
   }
   var sys=buildSystemPrompt(lang||"tr");
+  var think=!!AI_CONFIG.deepThink;
   var payload={
     model:AI_CONFIG.model,
     messages:[{role:"system",content:sys}].concat(messages||[]),
-    temperature:0.7,
     max_tokens:1024,
     stream:false,
-    /* M3 thinking özelliği: reasoning ayrı dönsün */
-    reasoning_split:true,
-    /* Hızlı yanıt için thinking'i kapat — kısa finans yorumları için ideal */
-    thinking:{type:"disabled"}
+    /* Thinking modu: kapaliyken hizli kisa yorum, acikken daha isabetli ama yavas */
+    thinking:{type:think?"enabled":"disabled"}
   };
-  var resp=await fetch(AI_CONFIG.endpoint,{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "Authorization":"Bearer "+AI_CONFIG.apiKey
-    },
-    body:JSON.stringify(payload)
-  });
-  if(!resp.ok){
-    var errText="";
-    try{errText=await resp.text()}catch(e){}
-    throw new Error("API "+(resp.status||"")+" "+(errText||"").slice(0,300));
-  }
-  var data=await resp.json();
-  if(data&&data.choices&&data.choices[0]&&data.choices[0].message){
-    var msg=data.choices[0].message;
-    var text=msg.content||"";
-    /* Eğer content içinde <think>...</think> varsa temizle */
-    text=text.replace(/<think>[\s\S]*?<\/think>/gi,"").trim();
-    /* reasoning_details varsa ekle (gerekirse) */
-    if(!text&&msg.reasoning_details&&msg.reasoning_details[0]&&msg.reasoning_details[0].text){
-      text=msg.reasoning_details[0].text;
+  if(think)payload.reasoning_effort="high";
+  else payload.temperature=0.7; /* temperature thinking modunda yoksayilir */
+  var ctl=null,timer=null;
+  try{
+    var opts={
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":"Bearer "+AI_CONFIG.apiKey
+      },
+      body:JSON.stringify(payload)
+    };
+    try{
+      if(typeof AbortController!=="undefined"){
+        ctl=new AbortController();
+        opts.signal=ctl.signal;
+        timer=setTimeout(function(){try{ctl.abort()}catch(e){}},AI_CONFIG.timeoutMs||30000);
+      }
+    }catch(abortErr){ctl=null}
+    var resp;
+    try{
+      resp=await fetch(AI_CONFIG.endpoint,opts);
+    }catch(netErr){
+      if(ctl&&netErr&&netErr.name==="AbortError"){
+        throw new Error(lang==="en"?"DeepSeek request timed out. Try again.":"DeepSeek isteği zaman aşımına uğradı. Tekrar dene.");
+      }
+      throw new Error((lang==="en"?"Connection failed: ":"Bağlantı kurulamadı: ")+String(netErr&&netErr.message?netErr.message:netErr));
     }
-    if(text)return text;
-    throw new Error("Boş yanıt: "+JSON.stringify(msg).slice(0,200));
+    if(!resp.ok){
+      var errText="";
+      try{errText=await resp.text()}catch(e){}
+      var detail="";
+      try{
+        var errObj=JSON.parse(errText);
+        detail=(errObj&&errObj.error&&(errObj.error.message||errObj.error))||"";
+        if(detail&&typeof detail!=="string")detail=JSON.stringify(detail);
+      }catch(parseErr){detail=errText||""}
+      if(resp.status===401||resp.status===403)throw new Error(lang==="en"?"DeepSeek rejected the API key (HTTP "+resp.status+"). Check it in Settings.":"DeepSeek API key'i reddetti (HTTP "+resp.status+"). Ayarlar'dan kontrol et.");
+      if(resp.status===402)throw new Error(lang==="en"?"DeepSeek account balance is insufficient (HTTP 402).":"DeepSeek hesap bakiyesi yetersiz (HTTP 402).");
+      if(resp.status===429)throw new Error(lang==="en"?"Too many requests (HTTP 429). Wait a moment.":"Çok fazla istek (HTTP 429). Biraz bekleyip tekrar dene.");
+      throw new Error("DeepSeek HTTP "+(resp.status||"")+(detail?": "+String(detail).slice(0,200):""));
+    }
+    var data=await resp.json();
+    var choice=data&&data.choices&&data.choices[0];
+    if(choice&&choice.message){
+      var answer=choice.message;
+      var text=String(answer.content||"").replace(/<think>[\s\S]*?<\/think>/gi,"").trim();
+      /* thinking modu: cevap bos ise akil yurutme metnini kullan */
+      if(!text&&answer.reasoning_content)text=String(answer.reasoning_content).trim();
+      if(text)return text;
+      if(choice.finish_reason==="length")throw new Error(lang==="en"?"Response was cut off (max_tokens).":"Yanıt kesildi (max_tokens sınırı).");
+      throw new Error("Boş yanıt: "+JSON.stringify(answer).slice(0,200));
+    }
+    if(data&&data.error)throw new Error("DeepSeek: "+String(data.error.message||JSON.stringify(data.error)).slice(0,200));
+    throw new Error("Beklenmeyen yanıt formatı: "+JSON.stringify(data).slice(0,200));
+  }finally{
+    if(timer)clearTimeout(timer);
   }
-  throw new Error("Beklenmeyen yanıt formatı: "+JSON.stringify(data).slice(0,200));
 }
 
 /* ============================================================ */
@@ -400,6 +470,7 @@ function sampleDemo(){
   var recRentDate=mkDate(y,m,Math.max(1,Math.min(today,2)));
   var recNetflixDate=mkDate(y,m,Math.max(today+2,Math.min(28,today+2)));
   return Object.assign({},base,{
+    _demo:true,
     expenses:[
       {id:"ex_1",amount:185,category:"yemek",note:"Kahve",date:mkDate(y,m,Math.max(1,today)),time:"09:10"},
       {id:"ex_2",amount:920,category:"market",note:"Migros",date:mkDate(y,m,Math.max(1,today)),time:"13:15"},
@@ -580,7 +651,128 @@ en:{
   active_profile:"Active",no_profiles:"No profiles yet."
 }
 };
-function fmt(n,cur){if(!cur)cur={sym:"₺",loc:"tr-TR"};return(!n&&n!==0)?"0 "+cur.sym:Math.round(n).toLocaleString(cur.loc)+" "+cur.sym}
+function fmt(n,cur){
+  if(!cur)cur={sym:"₺",loc:"tr-TR"};
+  if(n===""||n===null||typeof n==="undefined")return "0 "+cur.sym;
+  var v=+n;
+  if(isNaN(v)||!isFinite(v))return "0 "+cur.sym;
+  /* Kuruslar korunur: tam sayilar sade, kuruslu tutarlar 2 haneli gosterilir */
+  var r=Math.round(v*100)/100;
+  var digits=(Math.abs(r-Math.round(r))>0.0001)?2:0;
+  return r.toLocaleString(cur.loc,{minimumFractionDigits:digits,maximumFractionDigits:2})+" "+cur.sym;
+}
+/* Deger okuma: "1.234,56" (TR) ve "1,234.56" (EN) bicimlerinin ikisini de anlar.
+   Ayirici tek ve 3 hane varsa binlik kabul edilir (para birimi icin dogru davranis);
+   "0.500" gibi tam kismi 0 olan degerler ondalik sayilir. */
+function parseNum(input){
+  if(typeof input==="number")return isFinite(input)?input:NaN;
+  if(input===null||typeof input==="undefined")return NaN;
+  var s=String(input).trim();
+  if(!s)return NaN;
+  s=s.replace(/[^\d.,-]/g,"");
+  if(!s||s==="-"||s==="-."||s==="-,")return NaN;
+  var lastComma=s.lastIndexOf(","),lastDot=s.lastIndexOf(".");
+  if(lastComma>-1&&lastDot>-1){
+    /* Ikisi de var: en sagdaki ondalik ayiricidir, digeri binlik */
+    if(lastComma>lastDot)s=s.replace(/\./g,"").replace(",",".");
+    else s=s.replace(/,/g,"");
+  }else{
+    var sep=lastComma>-1?",":(lastDot>-1?".":"");
+    if(sep){
+      var parts=s.split(sep);
+      var intPart=parts[0].replace("-","");
+      var lastGrp=parts[parts.length-1];
+      var isThousands=(parts.length>1)&&(parts.length>2||(lastGrp.length===3&&intPart.length>0&&intPart!=="0"));
+      if(isThousands)s=parts.join("");
+      else if(parts.length===2)s=parts[0]+"."+parts[1];
+    }
+  }
+  var v=parseFloat(s);
+  return isNaN(v)?NaN:v;
+}
+
+/* ============================================================
+   PIN GUVENLIGI — duz metin PIN yerine tuzlu SHA-256 ozeti
+   Eski (duz metin) PIN ilk basarili girişte otomatik olarak
+   ozetli bicime yukseltilir. Guvensiz baglam (http/file://)
+   icin sifreleme yoksa geri donus olarak "plain:" bicimi.
+   ============================================================ */
+var PIN_KEY="pk_pin";
+var PIN_LOCK_KEY="pk_pin_lock";
+var PIN_MAX_TRIES=5;
+var PIN_LOCK_MS=30000;
+
+function pinLookup(){
+  try{
+    var s=localStorage.getItem(PIN_KEY);
+    if(!s)return null;
+    if(/^\d{4}$/.test(s))return{legacy:s}; /* v10 ve oncesi duz metin PIN */
+    var p=s.split(":");
+    if(p.length===3&&p[0]==="sha256"&&p[1]&&p[2])return{salt:p[1],hash:p[2]};
+    if(p.length===3&&p[0]==="plain"&&p[2])return{plain:p[2]};
+  }catch(e){}
+  return null;
+}
+function pinIsSet(){try{return !!localStorage.getItem(PIN_KEY)}catch(e){return false}}
+function pinRandomSalt(){
+  try{
+    var a=new Uint8Array(8);
+    if(typeof crypto!=="undefined"&&crypto.getRandomValues)crypto.getRandomValues(a);
+    else for(var i=0;i<a.length;i++)a[i]=Math.floor(Math.random()*256);
+    return Array.prototype.map.call(a,function(b){return ("0"+b.toString(16)).slice(-2)}).join("");
+  }catch(e){return String(Date.now())}
+}
+function pinSha256(text){
+  try{
+    if(typeof crypto!=="undefined"&&crypto.subtle&&crypto.subtle.digest&&typeof TextEncoder!=="undefined"){
+      return crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)).then(function(buf){
+        return Array.prototype.map.call(new Uint8Array(buf),function(b){return ("0"+b.toString(16)).slice(-2)}).join("");
+      });
+    }
+  }catch(e){}
+  return Promise.resolve(null);
+}
+function pinSave(pin){
+  var salt=pinRandomSalt();
+  return pinSha256(salt+":"+pin).then(function(hash){
+    try{
+      if(hash)localStorage.setItem(PIN_KEY,"sha256:"+salt+":"+hash);
+      else localStorage.setItem(PIN_KEY,"plain:"+salt+":"+pin);
+      return true;
+    }catch(e){return false}
+  });
+}
+function pinVerify(pin){
+  var rec=pinLookup();
+  if(!rec)return Promise.resolve(false);
+  if(rec.legacy)return Promise.resolve(String(pin)===rec.legacy);
+  if(rec.plain)return Promise.resolve(String(pin)===rec.plain);
+  if(rec.salt&&rec.hash)return pinSha256(rec.salt+":"+pin).then(function(hash){
+    if(!hash)return false;
+    return hash===rec.hash;
+  });
+  return Promise.resolve(false);
+}
+function pinLockUntil(){
+  try{
+    var s=JSON.parse(localStorage.getItem(PIN_LOCK_KEY)||"null");
+    if(s&&s.until&&s.until>Date.now())return s.until;
+  }catch(e){}
+  return 0;
+}
+function pinRegisterFail(){
+  var tries=0;
+  try{
+    var s=JSON.parse(localStorage.getItem(PIN_LOCK_KEY)||"null");
+    if(s&&s.tries)tries=s.tries;
+  }catch(e){}
+  tries=tries+1;
+  var out={tries:tries,until:0};
+  if(tries>=PIN_MAX_TRIES)out={tries:0,until:Date.now()+PIN_LOCK_MS};
+  try{localStorage.setItem(PIN_LOCK_KEY,JSON.stringify(out))}catch(e){}
+  return out;
+}
+function pinClearFails(){try{localStorage.removeItem(PIN_LOCK_KEY)}catch(e){}}
 function mkk(y,m){return y+"-"+String(m+1).padStart(2,"0")}
 function tdy(){
   /* Yerel tarihi döndür (UTC değil) — timezone farkından etkilenmez */
@@ -599,6 +791,35 @@ function sv(d){try{localStorage.setItem(KY,JSON.stringify(d))}catch(e){}}
 
 function _driveEnabled(){
   try{return!!(localStorage.getItem("pk_drive_url")&&localStorage.getItem("pk_drive_token"))}catch(e){return false}
+}
+/* Token nasil gonderilsin?
+   "query" = eski davranis: URL'de ?token=... (mevcut Apps Script ile uyumlu)
+   "body"  = daha guvenli: token istek govdesinde gider, URL'de/loglarda gorunmez
+             (Apps Script tarafi e.postData.contents icindeki token'i okumali) */
+var DRIVE_TRANSPORT_KEY="pk_drive_transport";
+function driveTransport(){
+  try{return localStorage.getItem(DRIVE_TRANSPORT_KEY)==="body"?"body":"query"}catch(e){return"query"}
+}
+function driveUrlFor(){
+  var base="";
+  try{base=localStorage.getItem("pk_drive_url")||""}catch(e){return ""}
+  if(!base)return "";
+  if(driveTransport()==="body")return base;
+  var token="";
+  try{token=localStorage.getItem("pk_drive_token")||""}catch(e){}
+  return base+"?token="+encodeURIComponent(token);
+}
+function driveBody(extra){
+  var out=Object.assign({},extra||{});
+  if(driveTransport()==="body"){
+    try{out.token=localStorage.getItem("pk_drive_token")||""}catch(e){}
+  }
+  return JSON.stringify(out);
+}
+function driveFetchOptions(extra){
+  var secure=driveTransport()==="body";
+  if(secure)return{method:"POST",cache:"no-store",headers:{"Content-Type":"text/plain;charset=utf-8"},body:driveBody(extra)};
+  return{method:"GET",cache:"no-store"};
 }
 function App(){
   var _th=h(function(){return localStorage.getItem("pk_theme")||(window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}),theme=_th[0],setTheme=_th[1];
@@ -667,9 +888,22 @@ function App(){
   var fileRef=ur(null);
   var csvImportRef=ur(null);
   var undoTimerRef=ur(null);
-  var _pinLocked=h(function(){return!!localStorage.getItem("pk_pin")}),pinLocked=_pinLocked[0],setPinLocked=_pinLocked[1];
+  var _pinLocked=h(pinIsSet),pinLocked=_pinLocked[0],setPinLocked=_pinLocked[1];
   var _pinInput=h(""),pinInput=_pinInput[0],setPinInput=_pinInput[1];
   var _pinWrong=h(false),pinWrong=_pinWrong[0],setPinWrong=_pinWrong[1];
+  /* Cok fazla yanlis denemede bekleme suresi (saniye) */
+  var _pinCd=h(0),pinCd=_pinCd[0],setPinCd=_pinCd[1];
+  ef(function(){
+    var until=pinLockUntil();
+    if(!until){setPinCd(0);return}
+    setPinCd(Math.max(1,Math.ceil((until-Date.now())/1000)));
+    var iv=setInterval(function(){
+      var left=Math.ceil((until-Date.now())/1000);
+      if(left<=0){clearInterval(iv);setPinCd(0);pinClearFails()}
+      else setPinCd(left);
+    },1000);
+    return function(){clearInterval(iv)};
+  },[]);
   var _showPinSet=h(false),showPinSet=_showPinSet[0],setShowPinSet=_showPinSet[1];
   var _pin1=h(""),pin1=_pin1[0],setPin1=_pin1[1];
   var _pin2=h(""),pin2=_pin2[0],setPin2=_pin2[1];
@@ -677,6 +911,7 @@ function App(){
   /* ==== Drive Sync state'leri ==== */
   var _driveUrl=h(function(){try{return localStorage.getItem("pk_drive_url")||""}catch(e){return""}}),driveUrl=_driveUrl[0],setDriveUrl=_driveUrl[1];
   var _driveToken=h(function(){try{return localStorage.getItem("pk_drive_token")||""}catch(e){return""}}),driveToken=_driveToken[0],setDriveToken=_driveToken[1];
+  var _driveTr=h(driveTransport()),driveTr=_driveTr[0],setDriveTr=_driveTr[1];
   var _syncStatus=h("idle"),syncStatus=_syncStatus[0],setSyncStatus=_syncStatus[1];
   var _lastSyncTs=h(0),lastSyncTs=_lastSyncTs[0],setLastSyncTs=_lastSyncTs[1];
   var _syncDraftUrl=h(function(){try{return localStorage.getItem("pk_drive_url")||""}catch(e){return""}}),syncDraftUrl=_syncDraftUrl[0],setSyncDraftUrl=_syncDraftUrl[1];
@@ -699,8 +934,8 @@ function App(){
   var _voiceList=h([]),voiceList=_voiceList[0],setVoiceList=_voiceList[1];
   var _voiceSelectedURI=h(function(){try{return localStorage.getItem("pk_voice_uri")||""}catch(e){return""}}),voiceSelectedURI=_voiceSelectedURI[0],setVoiceSelectedURI=_voiceSelectedURI[1];
   var _voiceShowPicker=h(false),voiceShowPicker=_voiceShowPicker[0],setVoiceShowPicker=_voiceShowPicker[1];
-  /* MinMax TTS ses seçimi (premium sesler) */
-  var _voiceMinMaxId=h(function(){try{return localStorage.getItem("pk_voice_minmax")||"English_FriendlyPerson"}catch(e){return"English_FriendlyPerson"}}),voiceMinMaxId=_voiceMinMaxId[0],setVoiceMinMaxId=_voiceMinMaxId[1];
+  /* Ses secimi: tarayicinin Web Speech sesleri (voiceURI) kullanilir.
+     Eski MiniMax ses id'si (pk_voice_minmax) artik okunmaz. */
   var _voiceSpeed=h(function(){try{return parseFloat(localStorage.getItem("pk_voice_speed"))||1.0}catch(e){return 1.0}}),voiceSpeed=_voiceSpeed[0],setVoiceSpeed=_voiceSpeed[1];
 
   /* ==== Drive Sync (App scope) ==== */
@@ -713,8 +948,7 @@ function App(){
     if(syncStatus==="syncing")return;
     if(!silent)setSyncStatus("syncing");
     try{
-      var u=localStorage.getItem("pk_drive_url")+"?token="+encodeURIComponent(localStorage.getItem("pk_drive_token"));
-      var res=await fetch(u,{method:"GET",cache:"no-store"});
+      var res=await fetch(driveUrlFor(),driveFetchOptions({action:"get"}));
       var text=await res.text();
       try{
         var json=JSON.parse(text);
@@ -726,6 +960,7 @@ function App(){
         try{
           var data=JSON.parse(json.data);
           if(data&&Array.isArray(data.expenses)){
+            if(data._demo)delete data._demo; /* demo bayragi Drive'dan gelmez */
             setS(Object.assign(ini(),data));
             setLastSyncTs(Date.now());
             setSyncStatus("ok");
@@ -746,10 +981,10 @@ function App(){
     if(!_driveEnabled())return;
     setSyncStatus("syncing");
     try{
-      var res=await fetch(localStorage.getItem("pk_drive_url")+"?token="+encodeURIComponent(localStorage.getItem("pk_drive_token")),{
+      var res=await fetch(driveUrlFor(),{
         method:"POST",
         headers:{"Content-Type":"text/plain;charset=utf-8"},
-        body:JSON.stringify({data:JSON.stringify(S)})
+        body:driveBody({action:"put",data:JSON.stringify(S)})
       });
       var text=await res.text();
       try{
@@ -818,79 +1053,47 @@ function App(){
   }
 
   async function _voiceSpeak(text){
-    if(typeof window==="undefined"||!window.fetch)return;
-    if(!AI_CONFIG.apiKey){setVoiceErr(lang==="tr"?"API key ayarlı değil. Ayarlar → MiniMax API Key'den ekle.":"API key not set. Go to Settings → MiniMax API Key.");return}
+    if(typeof window==="undefined"||!text)return;
+    _voiceStopSpeak();
+    /* DeepSeek sadece metin uretir; seslendirme tarayicinin Web Speech motoruyla yapilir */
+    if(!window.speechSynthesis){
+      setVoiceSpeaking(false);
+      setVoiceErr(lang==="tr"?"Bu tarayıcı sesli okumayı desteklemiyor.":"This browser does not support spoken replies.");
+      return;
+    }
     try{
-      _voiceStopSpeak();
-      setVoiceSpeaking(true);
-      var body={
-        model:AI_CONFIG.ttsModel||"speech-2.8-hd",
-        text:text,
-        stream:false,
-        voice_setting:{voice_id:voiceMinMaxId,speed:voiceSpeed,vol:1.0,pitch:0},
-        audio_setting:{sample_rate:32000,bitrate:128000,format:"mp3",channel:1}
-      };
-      var res=await fetch(AI_CONFIG.ttsEndpoint,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+AI_CONFIG.apiKey},body:JSON.stringify(body)});
-      if(!res.ok){
-        setVoiceSpeaking(false);
-        setVoiceErr("MinMax TTS hatası: HTTP "+res.status);
-        return;
-      }
-      var blob;
+      var spoken=String(text).slice(0,600);
+      var u=new SpeechSynthesisUtterance(spoken);
+      var voice=null;
       try{
-        var ct=res.headers.get("content-type")||"";
-        if(ct.indexOf("application/json")>=0){
-          /* MinMax genelde JSON içinde hex audio döndürür */
-          var data=await res.json();
-          var audioHex=(data&&typeof data.audio==="string"&&data.audio)||(data&&data.data&&typeof data.data.audio==="string"&&data.data.audio)||"";
-          var audioTypeRaw=(data&&data.audio_type)||(data&&data.data&&data.data.audio_type)||(data&&data.extra_info&&data.extra_info.audio_format)||"";
-          if(audioHex){
-            var hex=audioHex;
-            var arr=new Uint8Array(Math.floor(hex.length/2));
-            for(var i=0;i<hex.length;i+=2){
-              arr[i/2]=parseInt(hex.substr(i,2),16);
-            }
-            var audioType=(audioTypeRaw==="wav"||audioTypeRaw==="pcm")?"audio/wav":"audio/mpeg";
-            blob=new Blob([arr],{type:audioType});
-          }else if(data&&data.base_resp&&data.base_resp.status_code&&data.base_resp.status_code!==0){
-            setVoiceSpeaking(false);
-            setVoiceErr("MinMax TTS: "+(data.base_resp.status_msg||"hata"));
-            return;
-          }else{
-            setVoiceSpeaking(false);
-            setVoiceErr("MinMax TTS: yanıt beklenmedi");
-            return;
-          }
-        }else{
-          /* Doğrudan binary */
-          blob=await res.blob();
+        var voices=window.speechSynthesis.getVoices()||[];
+        if(voiceSelectedURI)voice=voices.filter(function(v){return v.voiceURI===voiceSelectedURI})[0]||null;
+        if(!voice){
+          var want=(lang==="en")?"en":"tr";
+          voice=voices.filter(function(v){return v.lang&&v.lang.toLowerCase().indexOf(want)===0})[0]||null;
         }
-      }catch(parseErr){
+      }catch(e){}
+      if(voice)u.voice=voice;
+      u.lang=(voice&&voice.lang)?voice.lang:(lang==="en"?"en-US":"tr-TR");
+      u.rate=voiceSpeed||1;
+      u.pitch=1;
+      setVoiceSpeaking(true);
+      var guard=setTimeout(function(){setVoiceSpeaking(false)},Math.min(60000,6000+spoken.length*90));
+      u.onend=function(){
+        clearTimeout(guard);
         setVoiceSpeaking(false);
-        setVoiceErr("Ses verisi okunamadı");
-        return;
-      }
-      if(!blob){setVoiceSpeaking(false);return}
-      var url=URL.createObjectURL(blob);
-      if(!_voiceAudioElR.current){
-        _voiceAudioElR.current=new Audio();
-      }
-      var audioEl=_voiceAudioElR.current;
-      audioEl.src=url;
-      audioEl.onended=function(){
-        setVoiceSpeaking(false);
-        try{URL.revokeObjectURL(url)}catch(e){}
+        /* Live modda konusma otomatik devam eder */
         if(voiceLiveRef.current&&voiceModalRef.current&&!voiceAutoPausedRef.current){
           setTimeout(function(){
             if(voiceLiveRef.current&&voiceModalRef.current&&!voiceAutoPausedRef.current&&!voiceListeningRef.current&&!aiLoadingRef.current)_voiceStartRec();
           },400);
         }
       };
-      audioEl.onerror=function(){setVoiceSpeaking(false);setVoiceErr((lang==="tr"?"Ses çalınamadı":"Audio playback failed"))};
-      await audioEl.play().catch(function(){setVoiceSpeaking(false)});
+      u.onerror=function(){clearTimeout(guard);setVoiceSpeaking(false)};
+      window.speechSynthesis.speak(u);
     }catch(e){
       setVoiceSpeaking(false);
-      setVoiceErr((lang==="tr"?"MinMax TTS hatası: ":"MinMax TTS error: ")+String(e));
+      setVoiceErr((lang==="tr"?"Ses hatası: ":"Speech error: ")+String(e));
     }
   }
 
@@ -974,7 +1177,7 @@ function App(){
       var ctx=buildAiContext();
       var sysContext="Su anki ayin finansal baglami:\n"+ctxToPrompt(ctx)+"\n\n--- Talimat: Kisa ve konusma tarzinda cevap ver (maks 2-3 cumle, sesli okunacak). Dogrudan Turkce konus, sanki kullanciyla yuz yuze konusuyormus gibi dogal ol. ---\n\nSoru: "+question;
       var msgs=[{role:"user",content:sysContext}];
-      var text=await callMiniMaxAI(msgs,lang);
+      var text=await callDeepSeekAI(msgs,lang);
       setVoiceAiText(text);
       setVoiceHistory(function(h){return h.concat([{role:"user",content:question},{role:"assistant",content:text}])});
       _voiceSpeak(text);
@@ -997,12 +1200,18 @@ function App(){
   }
   var _calcPay=h(""),calcPay=_calcPay[0],setCalcPay=_calcPay[1];
   var _aiKeyDraft=h(""),aiKeyDraft=_aiKeyDraft[0],setAiKeyDraft=_aiKeyDraft[1];
-  var _aiKeySaved=h(function(){try{return!!localStorage.getItem("pk_ai_key")}catch(e){return false}}),aiKeySaved=_aiKeySaved[0],setAiKeySaved=_aiKeySaved[1];
+  var _aiKeySaved=h(function(){return !!AI_CONFIG.apiKey}),aiKeySaved=_aiKeySaved[0],setAiKeySaved=_aiKeySaved[1];
+  var _aiKeyMode=h(AI_CONFIG.keyMode||"device"),aiKeyMode=_aiKeyMode[0],setAiKeyMode=_aiKeyMode[1];
+  var _aiDeepThink=h(!!AI_CONFIG.deepThink),aiDeepThink=_aiDeepThink[0],setAiDeepThink=_aiDeepThink[1];
+  ef(function(){
+    try{localStorage.setItem(AI_THINK_KEY,aiDeepThink?"1":"0")}catch(e){}
+    AI_CONFIG.deepThink=!!aiDeepThink;
+  },[aiDeepThink]);
   var _showProf=h(false),showProf=_showProf[0],setShowProf=_showProf[1];
   var _profName=h(""),profName=_profName[0],setProfName=_profName[1];
   var _aiVer=h(0),aiVer=_aiVer[0],setAiVer=_aiVer[1];
   var _showAiPrompt=h(false),showAiPrompt=_showAiPrompt[0],setShowAiPrompt=_showAiPrompt[1];
-  /* ==== MiniMax M3 canlı AI state'leri ==== */
+  /* ==== DeepSeek V4.1 Flash canlı AI state'leri ==== */
   var _aiLive=h(null),aiLive=_aiLive[0],setAiLive=_aiLive[1];
   var _aiLoading=h(false),aiLoading=_aiLoading[0],setAiLoading=_aiLoading[1];
   var aiLoadingRef=ur(aiLoading);aiLoadingRef.current=aiLoading;
@@ -1205,7 +1414,7 @@ function App(){
       } else {
         userMsg+="Point out any spending pattern I might have missed. Suggest one small, actionable saving step.";
       }
-      var text=await callMiniMaxAI([{role:"user",content:userMsg}],lang);
+      var text=await callDeepSeekAI([{role:"user",content:userMsg}],lang);
       setAiLive({text:text,ts:Date.now(),source:"monthly"});
     }catch(e){
       setAiErr(e&&e.message?e.message:"Bilinmeyen hata");
@@ -1221,7 +1430,7 @@ function App(){
       var ctx=buildAiContext();
       var sysContext="Su anki ayin finansal baglami:\n"+ctxToPrompt(ctx);
       var msgs=aiAskConv.concat([{role:"user",content:sysContext+"\n\n---\nSoru: "+question}]);
-      var text=await callMiniMaxAI(msgs,lang);
+      var text=await callDeepSeekAI(msgs,lang);
       var next=aiAskConv.concat([{role:"user",content:question},{role:"assistant",content:text}]);
       setAiAskConv(next);
       setAiAskInput("");
@@ -1249,7 +1458,7 @@ function App(){
         (lang==="tr"
           ?"Bu harcamayi yapmam mantikli mi? Kisaca (3-4 cumle) yorumla. Eger butceyi asiyorsa, alternatif oner."
           :"Is this expense reasonable? Reply briefly (3-4 sentences). If it breaks the budget, suggest an alternative.");
-      var text=await callMiniMaxAI([{role:"user",content:userMsg}],lang);
+      var text=await callDeepSeekAI([{role:"user",content:userMsg}],lang);
       var level="ok";
       var lc=text.toLowerCase();
       if(lang==="tr"){
@@ -1329,6 +1538,7 @@ function App(){
   ef(function(){
     document.body.className=dk?"dark":"light";
     document.getElementById("themeColor").content=dk?"#07090f":"#f0ede8";
+    document.title="Para Kontrol v"+APP_VERSION;
     localStorage.setItem("pk_theme",theme);
   },[theme]);
   ef(function(){localStorage.setItem("pk_lang",lang);document.documentElement.lang=lang;},[lang]);
@@ -1336,7 +1546,7 @@ function App(){
   ef(function(){localStorage.setItem(LAST_CAT_KEY,cat)},[cat]);
   ef(function(){try{localStorage.setItem(LAST_DATE_KEY,JSON.stringify({date:dt,ts:Date.now()}))}catch(e){}},[dt]);
   ef(function(){try{localStorage.setItem(SEARCH_MEM_KEY,JSON.stringify({q:srchQ,cat:srchCat,open:showSrch,ts:Date.now()}))}catch(e){}},[srchQ,srchCat,showSrch]);
-  ef(function(){sv(S);if(_driveEnabled())drivePushDebounced()},[S]);
+  ef(function(){sv(S);if(_driveEnabled()&&!S._demo)drivePushDebounced()},[S]);
   /* Drive sync: ilk açılışta agresif retry ile çek (Apps Script ilk invoke'da CORS uyarısı verebilir),
      sonra her 30 sn'de bir arka planda çek */
   ef(function(){
@@ -1366,16 +1576,17 @@ function App(){
       var _params=new URLSearchParams(window.location.search);
       if(_params.get("debug")==="1"){
         setTimeout(async function(){
-          var u=driveUrl+"?token="+encodeURIComponent(driveToken);
-          var getMsg="GET ❌ hiç denenmedi";
+          var u=driveUrlFor();
+          var secureTr=driveTransport()==="body";
+          var getMsg=(secureTr?"POST(get) ❌ hiç denenmedi":"GET ❌ hiç denenmedi");
           try{
-            var getRes=await fetch(u,{method:"GET",cache:"no-store"});
+            var getRes=await fetch(u,driveFetchOptions({action:"get"}));
             var getText=await getRes.text();
             getMsg="GET ✅ HTTP "+getRes.status+"\n"+getText.slice(0,250);
           }catch(getErr){getMsg="GET ❌ "+String(getErr);}
           var postMsg="POST ❌ hiç denenmedi";
           try{
-            var postRes=await fetch(u,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({data:JSON.stringify({debug:true,ts:Date.now()})})});
+            var postRes=await fetch(u,{method:"POST",headers:{"Content-Type":"text/plain"},body:driveBody({action:"put",data:JSON.stringify({debug:true,ts:Date.now()})})});
             var postText=await postRes.text();
             postMsg="POST ✅ HTTP "+postRes.status+"\n"+postText.slice(0,250);
           }catch(postErr){postMsg="POST ❌ "+String(postErr);}
@@ -1403,6 +1614,7 @@ function App(){
   },[]);
   ef(function(){return function(){if(undoTimerRef.current)clearTimeout(undoTimerRef.current)}},[]);
   ef(function(){
+    if(S._demo)return; /* ornek veriler icin otomatik kayit yapilmaz */
     if(!notifOn||!("Notification" in window)||Notification.permission!=="granted")return;
     var today=new Date();var todayKey=tdy();
     var pending=(S.recurring||[]).filter(function(r){
@@ -1416,6 +1628,7 @@ function App(){
     }
   },[notifOn,S.recurring,S.expenses,lang]);
   ef(function(){
+    if(S._demo)return; /* ornek veriler gercek harcamaya donusturulmez */
     if(!(S.recurring||[]).length)return;
     var today=new Date(),todayKey=tdy();
     setS(function(p){
@@ -1730,6 +1943,10 @@ function App(){
     });
     return Object.assign({},r,{dueDate:dueDate,isAddedThisMonth:isAddedThisMonth});
   });
+  /* Bu ay icin henuz eklenmemis (odenecek) tekrarlayan harcamalar — Harcama sekmesindeki hatirlatma karti */
+  var pendingRecs=um(function(){
+    return recs.filter(function(r){return !r.isAddedThisMonth});
+  },[S.recurring,S.expenses]);
 
   function grd(off){var d=new Date();d.setDate(d.getDate()+off);return d.toISOString().slice(0,10)}
   function rl(off){if(off===0)return t("today_label");if(off===-1)return t("yesterday_label");var d=new Date();d.setDate(d.getDate()+off);return d.getDate()+" "+MN[d.getMonth()].slice(0,3)}
@@ -1737,7 +1954,19 @@ function App(){
   function quickSaveKey(e){if(e.key==="Enter"){e.preventDefault();addExp()}}
   function submitOnEnter(e,action){if(e.key==="Enter"){e.preventDefault();action()}}
 
-  function addExp(){var a=parseFloat(amt.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{expenses:p.expenses.concat([{id:Date.now(),amount:a,category:cat,note:note,date:dt,time:dt===tdy()?new Date().toLocaleTimeString(t("locale"),{hour:"2-digit",minute:"2-digit"}):"—"}])})});setAmt("");setNote("");setOk(true);setTimeout(function(){setOk(false)},1600);setTimeout(function(){if(amtRef.current)amtRef.current.focus()},100)}
+  function addExp(){
+    var a=parseNum(amt);if(!a||a<=0)return;
+    setS(function(p){
+      /* Ilk gercek kayit: ornek (demo) veriler otomatik temizlenir, kategori ayarlari korunur */
+      var base=p._demo?Object.assign(ini(),{categories:p.categories||ini().categories}):p;
+      return Object.assign({},base,{expenses:(base.expenses||[]).concat([{id:Date.now(),amount:a,category:cat,note:note,date:dt,time:dt===tdy()?new Date().toLocaleTimeString(t("locale"),{hour:"2-digit",minute:"2-digit"}):"—"}])});
+    });
+    setAmt("");setNote("");setOk(true);setTimeout(function(){setOk(false)},1600);setTimeout(function(){if(amtRef.current)amtRef.current.focus()},100);
+  }
+  function clearDemo(){
+    if(!confirm(t("reset_confirm")))return;
+    setS(ini());
+  }
   function clearUndoTimer(){if(undoTimerRef.current){clearTimeout(undoTimerRef.current);undoTimerRef.current=null}}
   function queueUndo(item){clearUndoTimer();setUndoExp(item);undoTimerRef.current=setTimeout(function(){setUndoExp(null);undoTimerRef.current=null},4500)}
   function delExp(id){
@@ -1765,24 +1994,24 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     setOk(true);setTimeout(function(){setOk(false)},1200);setTimeout(function(){if(amtRef.current)amtRef.current.focus()},100);
   }
   function startEdit(exp){setEXId(exp.id);setEXAmt(String(exp.amount));setEXNote(exp.note||"");setEXCat(exp.category)}
-  function saveEdit(){if(!eXId)return;var a=parseFloat(eXAmt.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{expenses:p.expenses.map(function(e){return e.id===eXId?Object.assign({},e,{amount:a,note:eXNote,category:eXCat}):e})})});setEXId(null)}
-  function addIncEntry(){var v=parseFloat(iAmt.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{incomeEntries:(p.incomeEntries||[]).concat([{id:"ie_"+Date.now(),monthKey:incMK,amount:v,category:iCat,note:iNote}])})});setShowIF(false);setIAmt("");setINote("")}
+  function saveEdit(){if(!eXId)return;var a=parseNum(eXAmt);if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{expenses:p.expenses.map(function(e){return e.id===eXId?Object.assign({},e,{amount:a,note:eXNote,category:eXCat}):e})})});setEXId(null)}
+  function addIncEntry(){var v=parseNum(iAmt);if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{incomeEntries:(p.incomeEntries||[]).concat([{id:"ie_"+Date.now(),monthKey:incMK,amount:v,category:iCat,note:iNote}])})});setShowIF(false);setIAmt("");setINote("")}
   function delIncEntry(id){setS(function(p){return Object.assign({},p,{incomeEntries:(p.incomeEntries||[]).filter(function(e){return e.id!==id})})})}
-  function payDt(did){var a=parseFloat(dpA.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;return Object.assign({},d,{paid:d.paid+a,payments:(d.payments||[]).concat([{id:Date.now(),amount:a,date:tdy()}])})})})});setDpA("")}
-  function updDT(did){var v=parseFloat(dTI.replace(",","."));if(isNaN(v)||v<0)return;var lbl=dLI.trim();setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;var upd=Object.assign({},d,{total:v});if(lbl)upd.label=lbl;return upd})})});setEDI(null);setDTI("");setDLI("")}
-  function addToDbt(did){var v=parseFloat(dAI.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:d.total+v}):d})})});setDAI("")}
+  function payDt(did){var a=parseNum(dpA);if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;return Object.assign({},d,{paid:d.paid+a,payments:(d.payments||[]).concat([{id:Date.now(),amount:a,date:tdy()}])})})})});setDpA("")}
+  function updDT(did){var v=parseNum(dTI);if(isNaN(v)||v<0)return;var lbl=dLI.trim();setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){if(d.id!==did)return d;var upd=Object.assign({},d,{total:v});if(lbl)upd.label=lbl;return upd})})});setEDI(null);setDTI("");setDLI("")}
+  function addToDbt(did){var v=parseNum(dAI);if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:d.total+v}):d})})});setDAI("")}
   function resetDebt(did){setS(function(p){return Object.assign({},p,{debts:p.debts.map(function(d){return d.id===did?Object.assign({},d,{total:0,paid:0,payments:[]}):d})})});setEDI(null);setDTI("");setDLI("")}
   function removeBud(cid){var bu=Object.assign({},S.budgets);delete bu[cid];setS(function(p){return Object.assign({},p,{budgets:bu})});setBE(null);setBI("")}
-  function addDbt(){if(!nDL.trim())return;var v=parseFloat(nDT.replace(",","."));if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.concat([{id:"d_"+Date.now(),label:nDL.trim(),icon:"📄",total:v,paid:0,payments:[]}])})});setAdM(false);setNDL("");setNDT("")}
+  function addDbt(){if(!nDL.trim())return;var v=parseNum(nDT);if(!v||v<=0)return;setS(function(p){return Object.assign({},p,{debts:p.debts.concat([{id:"d_"+Date.now(),label:nDL.trim(),icon:"📄",total:v,paid:0,payments:[]}])})});setAdM(false);setNDL("");setNDT("")}
   function delDbt(did){if(!confirm(t("delete_confirm")))return;setS(function(p){return Object.assign({},p,{debts:p.debts.filter(function(d){return d.id!==did})})});if(aD===did)setAD((S.debts.find(function(d){return d.id!==did})||{}).id||"")}
-  function svBud(cid){var v=parseFloat(bI.replace(",","."));if(!v||v<=0)return;var bu=Object.assign({},S.budgets);bu[cid]=v;setS(function(p){return Object.assign({},p,{budgets:bu})});setBE(null);setBI("")}
+  function svBud(cid){var v=parseNum(bI);if(!v||v<=0)return;var bu=Object.assign({},S.budgets);bu[cid]=v;setS(function(p){return Object.assign({},p,{budgets:bu})});setBE(null);setBI("")}
   function renCat(cid){if(!cNI.trim())return;setS(function(p){return Object.assign({},p,{categories:cats.map(function(c){return c.id===cid?Object.assign({},c,{label:cNI.trim()}):c})})});setECId(null);setCNI("")}
   function chgIc(cid,ic){setS(function(p){return Object.assign({},p,{categories:cats.map(function(c){return c.id===cid?Object.assign({},c,{icon:ic}):c})})});setCIP(null)}
   function chgCl(cid,cl){setS(function(p){return Object.assign({},p,{categories:cats.map(function(c){return c.id===cid?Object.assign({},c,{color:cl}):c})})})}
   function delCat(cid){if(cats.length<=1)return;setS(function(p){return Object.assign({},p,{categories:cats.filter(function(c){return c.id!==cid})})});if(cat===cid)setCat((cats.find(function(c){return c.id!==cid})||{}).id||"market")}
   function addCt(){if(!ncN.trim())return;setS(function(p){return Object.assign({},p,{categories:cats.concat([{id:"c_"+Date.now(),label:ncN.trim(),icon:ncI,color:ncC}])})});setAcM(false);setNcN("");setNcI("📦");setNcC("#22c55e");setSIP(false)}
   function resetAll(){if(confirm(t("reset_confirm")))setS(ini())}
-  function importCSV(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;var reader=new FileReader();reader.onload=function(e){var lines=e.target.result.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});var newExp=[];var imported=0;lines.slice(1).forEach(function(line){var parts=[];var cur2="";var inQ=false;for(var i=0;i<line.length;i++){if(line[i]==='"'){inQ=!inQ}else if(line[i]===","&&!inQ){parts.push(cur2);cur2=""}else{cur2+=line[i]}}parts.push(cur2);var date=parts[0]&&parts[0].trim();var catLabel=parts[1]&&parts[1].trim();var amount=parseFloat((parts[3]||"").replace(",","."));var noteV=(parts[5]||"").trim();if(!date||!amount||amount<=0)return;var matchCat=cats.find(function(c){return c.label===catLabel})||cats[cats.length-1];newExp.push({id:"csv_"+Date.now()+"_"+imported,amount:amount,category:matchCat.id,note:noteV,date:date,time:"—"});imported++});if(imported>0){setS(function(p){return Object.assign({},p,{expenses:p.expenses.concat(newExp)})});alert(imported+(lang==="tr"?" harcama içe aktarıldı":" expenses imported"))}else{alert(t("invalid_file"))}};reader.readAsText(file,"utf-8");ev.target.value=""}
+  function importCSV(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;var reader=new FileReader();reader.onload=function(e){var lines=e.target.result.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});var newExp=[];var imported=0;lines.slice(1).forEach(function(line){var parts=[];var cur2="";var inQ=false;for(var i=0;i<line.length;i++){if(line[i]==='"'){inQ=!inQ}else if(line[i]===","&&!inQ){parts.push(cur2);cur2=""}else{cur2+=line[i]}}parts.push(cur2);var date=parts[0]&&parts[0].trim();var catLabel=parts[1]&&parts[1].trim();var amount=parseNum((parts[3]||""));var noteV=(parts[5]||"").trim();if(!date||!amount||amount<=0)return;var matchCat=cats.find(function(c){return c.label===catLabel})||cats[cats.length-1];newExp.push({id:"csv_"+Date.now()+"_"+imported,amount:amount,category:matchCat.id,note:noteV,date:date,time:"—"});imported++});if(imported>0){setS(function(p){return Object.assign({},p,{expenses:p.expenses.concat(newExp)})});alert(imported+(lang==="tr"?" harcama içe aktarıldı":" expenses imported"))}else{alert(t("invalid_file"))}};reader.readAsText(file,"utf-8");ev.target.value=""}
   function saveAiSnapshot(){
     if(!monthlyAiDraftSafe)return;
     var snap={id:"ai_"+Date.now(),ts:Date.now(),mode:monthlyAiDraftSafe.modeLabel,headline:monthlyAiDraftSafe.headline,summary:monthlyAiDraftSafe.summary,bullets:monthlyAiDraftSafe.bullets.slice(),actions:monthlyAiDraftSafe.actions.slice()};
@@ -1800,27 +2029,58 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       return Object.assign({},p,{aiNotes:notes});
     });
   }
-  function pinCheck(digit){var next=pinInput+digit;if(next.length<=4){setPinInput(next);if(next.length===4){var stored=localStorage.getItem("pk_pin");if(next===stored){setPinLocked(false);setPinInput("");setPinWrong(false)}else{setPinWrong(true);setTimeout(function(){setPinInput("");setPinWrong(false)},700)}}}}
-  function pinSetSave(){if(pin1.length===4&&pin1===pin2){localStorage.setItem("pk_pin",pin1);setShowPinSet(false);setPin1("");setPin2("");alert(lang==="tr"?"PIN belirlendi":"PIN set successfully")}else{alert(t("pin_mismatch"))}}
-  function pinRemove(){localStorage.removeItem("pk_pin");setPinLocked(false);setShowPinSet(false)}
+  function pinCheck(digit){
+    if(pinCd>0)return;
+    if(pinLockUntil()>Date.now())return;
+    var next=pinInput+digit;
+    if(next.length>4)return;
+    setPinInput(next);
+    if(next.length<4)return;
+    pinVerify(next).then(function(ok){
+      if(ok){
+        pinClearFails();
+        /* Eski duz metin PIN ozetli bicime yukseltilir */
+        var rec=pinLookup();
+        if(rec&&rec.legacy)pinSave(next);
+        setPinLocked(false);setPinInput("");setPinWrong(false);setPinCd(0);
+      }else{
+        var st=pinRegisterFail();
+        setPinInput("");setPinWrong(true);
+        if(st.until&&st.until>Date.now()){
+          var left=Math.max(1,Math.ceil((st.until-Date.now())/1000));
+          setPinCd(left);
+        }
+        setTimeout(function(){setPinWrong(false)},700);
+      }
+    });
+  }
+  function pinSetSave(){
+    if(pin1.length!==4||pin1!==pin2){alert(t("pin_mismatch"));return}
+    pinSave(pin1).then(function(ok){
+      if(!ok){alert(lang==="tr"?"PIN kaydedilemedi":"PIN could not be saved");return}
+      setShowPinSet(false);setPin1("");setPin2("");
+      alert(lang==="tr"?"PIN belirlendi":"PIN set successfully");
+    });
+  }
+  function pinRemove(){try{localStorage.removeItem(PIN_KEY)}catch(e){}try{localStorage.removeItem(PIN_LOCK_KEY)}catch(e){}setPinLocked(false);setShowPinSet(false)}
   function requestNotif(){if(!("Notification" in window)){alert(t("notif_perm"));return}Notification.requestPermission().then(function(perm){if(perm==="granted"){setNotifOn(true)}else{alert(t("notif_perm"))}})}
   function saveBudgetProfile(){if(!profName.trim())return;var newProf={id:"bp_"+Date.now(),name:profName.trim(),budgets:Object.assign({},S.budgets)};setS(function(p){return Object.assign({},p,{budgetProfiles:(p.budgetProfiles||[]).concat([newProf])})});setShowProf(false);setProfName("")}
   function loadBudgetProfile(prof){setS(function(p){return Object.assign({},p,{budgets:Object.assign({},prof.budgets)})})}
   function deleteBudgetProfile(pid){setS(function(p){return Object.assign({},p,{budgetProfiles:(p.budgetProfiles||[]).filter(function(pr){return pr.id!==pid})})})}
-  function addRec(){if(!recLbl.trim()||!recAmt)return;var a=parseFloat(recAmt.replace(",","."));if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{recurring:recs.concat([{id:"r_"+Date.now(),label:recLbl.trim(),category:recCat,amount:a,dayOfMonth:parseInt(recDay)||1,paidMonths:[]}])})});setRecForm(false);setRecLbl("");setRecAmt("");setRecCat("fatura");setRecDay("1")}
+  function addRec(){if(!recLbl.trim()||!recAmt)return;var a=parseNum(recAmt);if(!a||a<=0)return;setS(function(p){return Object.assign({},p,{recurring:recs.concat([{id:"r_"+Date.now(),label:recLbl.trim(),category:recCat,amount:a,dayOfMonth:parseInt(recDay)||1,paidMonths:[]}])})});setRecForm(false);setRecLbl("");setRecAmt("");setRecCat("fatura");setRecDay("1")}
   function delRec(rid){setS(function(p){return Object.assign({},p,{recurring:recs.filter(function(r){return r.id!==rid})})})}
   function startEditRec(r){setERId(r.id);setERLbl(r.label);setERAmt(String(r.amount));setERCat(r.category);setERDay(String(r.dayOfMonth||1))}
-  function saveEditRec(){if(!eRId)return;var a=parseFloat(eRAmt.replace(",","."));if(!a||a<=0||!eRLbl.trim())return;setS(function(p){return Object.assign({},p,{recurring:recs.map(function(r){return r.id===eRId?Object.assign({},r,{label:eRLbl.trim(),amount:a,category:eRCat,dayOfMonth:parseInt(eRDay)||1}):r})})});setERId(null)}
-  function payRec(r){setS(function(p){return Object.assign({},p,{expenses:p.expenses.concat([{id:Date.now(),amount:r.amount,category:r.category,note:r.label,date:tdy(),time:new Date().toLocaleTimeString(t("locale"),{hour:"2-digit",minute:"2-digit"})}]),recurring:recs.map(function(x){return x.id===r.id?Object.assign({},x,{paidMonths:(x.paidMonths||[]).concat([cMK])}):x})})});setOk(true);setTimeout(function(){setOk(false)},1600)}
+  function saveEditRec(){if(!eRId)return;var a=parseNum(eRAmt);if(!a||a<=0||!eRLbl.trim())return;setS(function(p){return Object.assign({},p,{recurring:recs.map(function(r){return r.id===eRId?Object.assign({},r,{label:eRLbl.trim(),amount:a,category:eRCat,dayOfMonth:parseInt(eRDay)||1}):r})})});setERId(null)}
+  function payRec(r){setS(function(p){return Object.assign({},p,{expenses:p.expenses.concat([{id:Date.now(),amount:r.amount,category:r.category,note:r.label,date:tdy(),time:new Date().toLocaleTimeString(t("locale"),{hour:"2-digit",minute:"2-digit"}),recurringId:r.id}]),recurring:recs.map(function(x){return x.id===r.id?Object.assign({},x,{paidMonths:(x.paidMonths||[]).concat([cMK])}):x})})});setOk(true);setTimeout(function(){setOk(false)},1600)}
   function skipRec(r){setS(function(p){return Object.assign({},p,{recurring:recs.map(function(x){return x.id===r.id?Object.assign({},x,{paidMonths:(x.paidMonths||[]).concat([cMK])}):x})})})}
   var tpls=S.templates||[];
-  function saveTpl(){if(!amt||!parseFloat(amt.replace(",",".")))return;var c=fc(cat);setS(function(p){return Object.assign({},p,{templates:tpls.concat([{id:Date.now(),category:cat,amount:parseFloat(amt.replace(",",".")),note:note,label:c.icon+" "+(note||c.label)}])})})}
+  function saveTpl(){if(!amt||!parseNum(amt))return;var c=fc(cat);setS(function(p){return Object.assign({},p,{templates:tpls.concat([{id:Date.now(),category:cat,amount:parseNum(amt),note:note,label:c.icon+" "+(note||c.label)}])})})}
   function useTpl(tp){setCat(tp.category);setAmt(String(tp.amount));setNote(tp.note||"")}
   function delTpl(id){setS(function(p){return Object.assign({},p,{templates:tpls.filter(function(tp){return tp.id!==id})})})}
-  function saveSavingsGoal(){var a=parseFloat(goalAmt.replace(",","."));setS(function(p){return Object.assign({},p,{savings:{goal:isNaN(a)?0:Math.max(0,a),label:goalLbl.trim()||t("savings_label")}})});setShowGoal(false)}
+  function saveSavingsGoal(){var a=parseNum(goalAmt);setS(function(p){return Object.assign({},p,{savings:{goal:isNaN(a)?0:Math.max(0,a),label:goalLbl.trim()||t("savings_label")}})});setShowGoal(false)}
   function exportCSV(){var rows=[t("csv_headers")];S.expenses.slice().sort(function(a,b){return a.date>b.date?1:-1}).forEach(function(e){var c=fc(e.category);rows.push([e.date,c.label,c.icon,e.amount,cur.id,e.note||""])});var csv=rows.map(function(r){return r.map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(",")}).join("\n");var blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download="para-kontrol-"+(new Date().toISOString().slice(0,10))+".csv";a.click();URL.revokeObjectURL(url)}
   function exportJSON(){var blob=new Blob([JSON.stringify(S,null,2)],{type:"application/json"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download="para-kontrol-yedek-"+(new Date().toISOString().slice(0,10))+".json";a.click();URL.revokeObjectURL(url)}
-  function importJSON(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;var reader=new FileReader();reader.onload=function(e){try{var data=JSON.parse(e.target.result);if(data&&data.expenses&&Array.isArray(data.expenses)){if(!data.categories)data.categories=DC.map(function(c){return Object.assign({},c)});if(!data.templates)data.templates=[];if(!data.recurring)data.recurring=[];if(!data.savings)data.savings={goal:0,label:t("savings_label")};if(!data.incomeEntries)data.incomeEntries=[];setS(Object.assign(ini(),data));alert(t("backup_loaded")+data.expenses.length+t("exp_count"))}else{alert(t("invalid_file"))}}catch(err){alert(t("file_err"))}};reader.readAsText(file);ev.target.value=""}
+  function importJSON(ev){var file=ev.target.files&&ev.target.files[0];if(!file)return;var reader=new FileReader();reader.onload=function(e){try{var data=JSON.parse(e.target.result);if(data&&data.expenses&&Array.isArray(data.expenses)){if(!data.categories)data.categories=DC.map(function(c){return Object.assign({},c)});if(data._demo)delete data._demo;if(!data.templates)data.templates=[];if(!data.recurring)data.recurring=[];if(!data.savings)data.savings={goal:0,label:t("savings_label")};if(!data.incomeEntries)data.incomeEntries=[];setS(Object.assign(ini(),data));alert(t("backup_loaded")+data.expenses.length+t("exp_count"))}else{alert(t("invalid_file"))}}catch(err){alert(t("file_err"))}};reader.readAsText(file);ev.target.value=""}
   var filteredExp=um(function(){var list=S.expenses.slice();if(srchQ.trim()){var q=srchQ.toLowerCase();list=list.filter(function(e){var c=fc(e.category);return(e.note&&e.note.toLowerCase().indexOf(q)>=0)||c.label.toLowerCase().indexOf(q)>=0||String(e.amount).indexOf(q)>=0})}if(srchCat!=="all")list=list.filter(function(e){return e.category===srchCat});return list.sort(function(a,b){return b.date>a.date?1:b.date<a.date?-1:b.id-a.id})},[S,srchQ,srchCat]);
   // ── RENDER ──
   var amountColor=ok?"#06ffa5":"var(--txt)";
@@ -1927,11 +2187,12 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       <div style=${{display:"flex",gap:14,marginBottom:32}}>
         ${[0,1,2,3].map(function(i){return html`<div key=${i} class=${"pin-dot"+(pinInput.length>i?" filled":"")}></div>`})}
       </div>
-      ${pinWrong&&html`<p style=${{color:"var(--red)",fontSize:13,fontWeight:700,marginBottom:16,animation:"pulse 0.5s ease"}}>${t("pin_wrong")}</p>`}
-      <div style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:240}}>
+      ${pinCd>0&&html`<p style=${{color:"var(--amber)",fontSize:12,fontWeight:700,marginBottom:16,textAlign:"center",maxWidth:240}}>${lang==="tr"?("Çok fazla yanlış deneme. "+pinCd+" sn sonra tekrar dene."):("Too many attempts. Try again in "+pinCd+"s.")}</p>`}
+      ${pinWrong&&pinCd===0&&html`<p style=${{color:"var(--red)",fontSize:13,fontWeight:700,marginBottom:16,animation:"pulse 0.5s ease"}}>${t("pin_wrong")}</p>`}
+      <div style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:240,opacity:pinCd>0?0.4:1}}>
         ${pinKeys.map(function(k,i){
           if(k==="")return html`<div key=${i}/>`;
-          if(k==="⌫")return html`<button key=${i} class="pin-key" onClick=${function(){setPinInput(function(p){return p.slice(0,-1)});setPinWrong(false)}} style=${{fontSize:18}}>${k}</button>`;
+          if(k==="⌫")return html`<button key=${i} class="pin-key" onClick=${function(){if(pinCd>0)return;setPinInput(function(p){return p.slice(0,-1)});setPinWrong(false)}} style=${{fontSize:18}}>${k}</button>`;
           return html`<button key=${i} class="pin-key" onClick=${function(){pinCheck(k)}}>${k}</button>`;
         })}
       </div>
@@ -1965,16 +2226,23 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     </div>
   </div>
 
+  <!-- DEMO VERI UYARISI -->
+  ${S._demo&&html`<div style=${{margin:"0 16px 16px",padding:"12px 14px",borderRadius:"var(--radius-sm)",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.25)",display:"flex",alignItems:"center",gap:10}}>
+    <span style=${{fontSize:16}}>🧪</span>
+    <div style=${{flex:1,fontSize:11,color:"var(--amber)",lineHeight:1.45,fontWeight:600}}>${lang==="tr"?"Şu an örnek (demo) veriler gösteriliyor. İlk kendi kaydını eklediğinde harcama/gelir/borç/bütçe örnekleri otomatik temizlenir; kategori ayarların korunur.":"Demo data is showing. As soon as you add your first own record, the sample expenses/income/debts/budgets are cleared automatically; your category settings are kept."}</div>
+    <button onClick=${clearDemo} style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(245,158,11,0.35)",background:"rgba(245,158,11,0.12)",color:"var(--amber)",fontSize:11,fontWeight:700,cursor:"pointer",flexShrink:0}}>${lang==="tr"?"Temizle":"Clear"}</button>
+  </div>`}
+
   <!-- SETTINGS -->
   ${showSet&&html`<div class="glass fade-in" style=${{margin:"0 16px 16px",padding:"4px 0"}}>
     ${[
       {id:"lang",icon:"🌐",label:t("language"),val:lang==="tr"?"🇹🇷 Türkçe":"🇬🇧 English"},
       {id:"cur",icon:"💱",label:t("currency"),val:curId},
       {id:"data",icon:"💾",label:t("data"),val:""},
-      {id:"aikey",icon:"🔑",label:lang==="tr"?"MiniMax API Key":"MiniMax API Key",val:aiKeySaved?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Eksik":"Missing")},
+      {id:"aikey",icon:"🔑",label:lang==="tr"?"DeepSeek API Key":"DeepSeek API Key",val:aiKeySaved?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Eksik":"Missing")},
       {id:"drive",icon:"☁️",label:t("drive_sync"),val:driveUrl?t("drive_active"):t("drive_off")},
       {id:"notif",icon:"🔔",label:t("notifications"),val:notifOn?(lang==="tr"?"Açık":"On"):(lang==="tr"?"Kapalı":"Off")},
-      {id:"pin",icon:"🔒",label:t("pin_protect"),val:localStorage.getItem("pk_pin")?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Yok":"None")}
+      {id:"pin",icon:"🔒",label:t("pin_protect"),val:pinIsSet()?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Yok":"None")}
     ].map(function(sec,i,arr){
       var open=setSec===sec.id;
       return html`<div key=${sec.id} style=${{borderBottom:i<arr.length-1?"1px solid var(--border)":"none"}}>
@@ -1999,21 +2267,35 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
             <button onClick=${function(){window.print()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("print_report")}</button>
           </div>`}
           ${sec.id==="aikey"&&html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
-            <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.5}}>${lang==="tr"?"MiniMax AI özelliklerinin (sohbet, sesli sohbet) çalışması için gerekli. Key sadece bu telefonda saklanır, koda gömülmez.":"Required for MiniMax AI features (chat, voice chat). The key is stored only on this device, never in the code."}</div>
-            <input class="inp-field" type="password" placeholder=${lang==="tr"?"sk-... ile başlayan key":"Key starting with sk-..."} value=${aiKeyDraft} onInput=${function(e){setAiKeyDraft(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
+            <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.5}}>${lang==="tr"?"DeepSeek V4.1 Flash (deepseek-flash) ile çalışır. Key sadece senin cihazında saklanır, koda gömülmez. MiniMax artık kullanılmıyor; sk- ile başlayan bir DeepSeek key'i gir.":"Works with DeepSeek V4.1 Flash (deepseek-flash). The key is stored only on your device, never in the code. MiniMax is no longer used; enter a DeepSeek key starting with sk-."}</div>
+            <input class="inp-field" type="password" placeholder=${lang==="tr"?"sk-... ile başlayan DeepSeek key":"DeepSeek key starting with sk-..."} value=${aiKeyDraft} onInput=${function(e){setAiKeyDraft(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
+            <div style=${{display:"flex",gap:6}}>
+              ${[{id:"device",l:lang==="tr"?"📱 Bu cihazda hatırla":"📱 Remember on device"},{id:"session",l:lang==="tr"?"🔒 Sadece bu oturum":"🔒 Session only"}].map(function(m){var act=aiKeyMode===m.id;return html`<button key=${m.id} onClick=${function(){setAiKeyMode(m.id);try{localStorage.setItem(AI_KEY_MODE_KEY,m.id)}catch(e){}}} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${m.l}</button>`})}
+            </div>
+            <div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.45}}>${lang==="tr"?"\"Sadece bu oturum\" seçilirse key sekme kapanınca silinir (kaydedilmez, daha güvenli).":"With \"Session only\" the key is erased when the tab closes (never persisted, safer)."}</div>
+            <label style=${{display:"flex",alignItems:"center",gap:8,fontSize:11,color:"var(--txt)",cursor:"pointer"}}>
+              <input type="checkbox" checked=${aiDeepThink} onChange=${function(e){setAiDeepThink(!!e.target.checked)}}/>
+              <span>🧠 ${lang==="tr"?"Derin düşünme (yavaş ama daha isabetli)":"Deep thinking (slower, more accurate)"}</span>
+            </label>
+            <div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.45}}>${lang==="tr"?"Kapalıyken daha hızlı yanıt verir; açıkken model önce adım adım düşünür.":"When off it replies faster; when on the model reasons step by step first."}</div>
             <button onClick=${function(){
               var v=aiKeyDraft.trim();if(!v)return;
-              try{localStorage.setItem("pk_ai_key",v)}catch(e){}
-              AI_CONFIG.apiKey=v;setAiKeySaved(true);setAiKeyDraft("");
+              if(!aiKeyStore(v,aiKeyMode)){alert(lang==="tr"?"Key saklanamadı (tarayıcı depolamayı engelliyor).":"Could not store the key (browser storage blocked).");return}
+              AI_CONFIG.apiKey=v;AI_CONFIG.keyMode=aiKeyMode;setAiKeySaved(true);setAiKeyDraft("");
+              if(v.indexOf("sk-")!==0)alert(lang==="tr"?"Uyarı: DeepSeek key'leri genelde sk- ile başlar. Yanlış key 401 hatası verir.":"Warning: DeepSeek keys usually start with sk-. A wrong key returns HTTP 401.");
             }} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#0ea5e9,#6366f1)",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Kaydet":"Save"}</button>
             ${aiKeySaved?html`<div style=${{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:"var(--radius-xs)",background:"rgba(6,255,165,0.06)",border:"1px solid rgba(6,255,165,0.3)",fontSize:11,color:"var(--green)",fontWeight:700}}>
-              <span>✓</span><span style=${{flex:1}}>${lang==="tr"?"Key ayarlı":"Key is set"}</span>
-              <button onClick=${function(){try{localStorage.removeItem("pk_ai_key")}catch(e){}AI_CONFIG.apiKey="";setAiKeySaved(false)}} style=${{padding:"4px 9px",borderRadius:999,border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${lang==="tr"?"Sil":"Remove"}</button>
+              <span>✓</span><span style=${{flex:1}}>${lang==="tr"?(AI_CONFIG.keyMode==="session"?"Key ayarlı (sadece bu oturum)":"Key ayarlı (bu cihazda kayıtlı)"):(AI_CONFIG.keyMode==="session"?"Key set (session only)":"Key set (saved on device)")}</span>
+              <button onClick=${function(){aiKeyStore("",aiKeyMode);AI_CONFIG.apiKey="";setAiKeySaved(false)}} style=${{padding:"4px 9px",borderRadius:999,border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${lang==="tr"?"Sil":"Remove"}</button>
             </div>`:null}
           </div>`}
           ${sec.id==="drive"&&html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
             <input class="inp-field" type="text" placeholder=${t("drive_url_ph")} value=${syncDraftUrl} onInput=${function(e){setSyncDraftUrl(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
             <input class="inp-field" type="text" placeholder=${t("drive_token_ph")} value=${syncDraftToken} onInput=${function(e){setSyncDraftToken(e.target.value)}} style=${{fontSize:12,fontFamily:"var(--mono)"}}/>
+            <div style=${{display:"flex",gap:6}}>
+              ${[{id:"query",l:lang==="tr"?"🔗 URL'de token (uyumlu)":"🔗 Token in URL (compatible)"},{id:"body",l:lang==="tr"?"🛡️ Gövdede token (güvenli)":"🛡️ Token in body (safer)"}].map(function(tr){var act=driveTr===tr.id;return html`<button key=${tr.id} onClick=${function(){setDriveTr(tr.id);try{localStorage.setItem(DRIVE_TRANSPORT_KEY,tr.id)}catch(e){}}} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${tr.l}</button>`})}
+            </div>
+            <div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.45}}>${lang==="tr"?"\"URL'de token\" mevcut Apps Script ile çalışır ama token tarayıcı geçmişine/loglara düşebilir. \"Gövdede token\" daha güvenli; Apps Script'in e.postData içindeki token'ı okuması gerekir (bkz. README).":"\"Token in URL\" works with the existing Apps Script but the secret may end up in browser history/logs. \"Token in body\" is safer; your Apps Script must read the token from e.postData (see README)."}</div>
             <button onClick=${function(){
               if(!syncDraftUrl.trim()||!syncDraftToken.trim())return;
               driveSaveConfig(syncDraftUrl.trim(),syncDraftToken.trim());
@@ -2035,7 +2317,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
           </div>`}
           ${sec.id==="pin"&&html`<div>
             ${!showPinSet?html`<div style=${{display:"flex",gap:6}}>
-              ${localStorage.getItem("pk_pin")?html`<button onClick=${pinRemove} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("pin_disable")}</button>`:null}
+              ${pinIsSet()?html`<button onClick=${pinRemove} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("pin_disable")}</button>`:null}
               <button onClick=${function(){setShowPinSet(true);setPin1("");setPin2("")}} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("set_pin")}</button>
             </div>`
             :html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
@@ -2050,6 +2332,9 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
         </div>`}
       </div>`
     })}
+    <div style=${{padding:"12px 18px",borderTop:"1px solid var(--border)",fontSize:10,color:"var(--dim)",textAlign:"center"}}>
+      Para Kontrol v${APP_VERSION} · ${AI_CONFIG.modelLabel} · ${lang==="tr"?"veriler yalnızca bu cihazda":"data stays on this device"}
+    </div>
   </div>`}
 
   <!-- STAT CARDS -->
@@ -2077,7 +2362,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
   <!-- HARCAMA TAB -->
   ${tab==="harcama"&&html`<div style=${{padding:"0 16px"}} class="fade-in">
 
-    ${false&&pendingRecs.length>0&&html`<div style=${{marginBottom:16,borderRadius:"var(--radius)",padding:14,background:"rgba(168,85,247,0.08)",border:"1px solid rgba(168,85,247,0.2)"}}>
+    ${pendingRecs.length>0&&html`<div style=${{marginBottom:16,borderRadius:"var(--radius)",padding:14,background:"rgba(168,85,247,0.08)",border:"1px solid rgba(168,85,247,0.2)"}}>
       <div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
         <span style=${{fontSize:16}}>🔔</span>
         <span style=${{fontSize:13,fontWeight:700,color:"var(--purple)"}}>${t("this_month_due")}</span>
@@ -2197,8 +2482,8 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     <button class=${"btn-primary"+(ok?" ok":"")} onClick=${addExp}>
       ${ok?t("added"):fc(cat).icon+" "+(dt===tdy()?t("add_expense"):edp.d+" "+MN[edp.m]+t("add_to_date"))}
     </button>
-    ${amt&&parseFloat(amt.replace(",","."))>0&&html`<button disabled=${aiLoading} onClick=${function(){var a=parseFloat(amt.replace(",","."));if(!a||a<=0)return;preCheckExpense(a,cat,note)}} style=${{width:"100%",padding:"10px",marginTop:8,borderRadius:"var(--radius-sm)",border:"1px solid rgba(168,85,247,0.28)",background:"linear-gradient(135deg,rgba(168,85,247,0.12),rgba(59,130,246,0.08))",color:"#d8b4fe",fontSize:12,fontWeight:800,cursor:aiLoading?"wait":"pointer"}}>${aiLoading?(lang==="tr"?"AI düşünüyor…":"AI thinking…"):"💡 "+(lang==="tr"?"Akıl Danış (Kaydetmeden Önce)":"Ask AI (Before Saving)")}</button>`}
-    ${amt&&parseFloat(amt.replace(",","."))>0&&html`<button onClick=${saveTpl} style=${{width:"100%",padding:"10px",borderRadius:"var(--radius-sm)",border:"1px dashed var(--border)",background:"transparent",color:"var(--sub)",fontSize:12,cursor:"pointer",marginTop:8,fontWeight:600}}>${t("save_tpl")}</button>`}
+    ${amt&&parseNum(amt)>0&&html`<button disabled=${aiLoading} onClick=${function(){var a=parseNum(amt);if(!a||a<=0)return;preCheckExpense(a,cat,note)}} style=${{width:"100%",padding:"10px",marginTop:8,borderRadius:"var(--radius-sm)",border:"1px solid rgba(168,85,247,0.28)",background:"linear-gradient(135deg,rgba(168,85,247,0.12),rgba(59,130,246,0.08))",color:"#d8b4fe",fontSize:12,fontWeight:800,cursor:aiLoading?"wait":"pointer"}}>${aiLoading?(lang==="tr"?"AI düşünüyor…":"AI thinking…"):"💡 "+(lang==="tr"?"Akıl Danış (Kaydetmeden Önce)":"Ask AI (Before Saving)")}</button>`}
+    ${amt&&parseNum(amt)>0&&html`<button onClick=${saveTpl} style=${{width:"100%",padding:"10px",borderRadius:"var(--radius-sm)",border:"1px dashed var(--border)",background:"transparent",color:"var(--sub)",fontSize:12,cursor:"pointer",marginTop:8,fontWeight:600}}>${t("save_tpl")}</button>`}
     ${recurringSection()}
 
     <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:22,marginBottom:10}}>
@@ -2293,7 +2578,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     ${adO&&html`<div class="glass" style=${{padding:18,marginTop:16}}>
       <p style=${{fontSize:14,fontWeight:700,marginBottom:14}}>${"🧮 "+t("debt_calc")}</p>
       ${function(){var remain=Math.max(0,(adO.total||0)-(adO.paid||0));if(remain<=0)return html`<p style=${{color:"var(--green)",fontSize:13,fontWeight:700,textAlign:"center",padding:"8px 0"}}>✅ ${t("no_debt_remain")}</p>`;
-        var pay=parseFloat(calcPay.replace(",","."));var months=pay>0?(remain/pay):null;var monthText=months!==null?months.toLocaleString(t("locale"),{minimumFractionDigits:Math.abs(months-Math.round(months))<0.01?0:1,maximumFractionDigits:2}):null;
+        var pay=parseNum(calcPay);var months=pay>0?(remain/pay):null;var monthText=months!==null?months.toLocaleString(t("locale"),{minimumFractionDigits:Math.abs(months-Math.round(months))<0.01?0:1,maximumFractionDigits:2}):null;
         return html`<div>
           <div style=${{display:"flex",gap:8,marginBottom:12}}>
             <input class="inp-field" type="text" inputMode="decimal" placeholder=${t("monthly_pay")} value=${calcPay} onInput=${function(e){setCalcPay(e.target.value.replace(/[^0-9.,]/g,""))}} style=${{flex:1,fontFamily:"var(--mono)",fontSize:15,fontWeight:700}}/>
@@ -2391,61 +2676,8 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       ${S.savings.goal===0&&!showGoal&&html`<p style=${{color:"var(--dim)",fontSize:12,textAlign:"center",padding:"10px 0"}}>${t("no_goal")}</p>`}
     </div>
 
-    <!-- Recurring -->
-    <div style=${{marginBottom:16,display:"none"}}>
-      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <p style=${{fontSize:14,fontWeight:700}}>${t("recurring")}</p>
-        <button onClick=${function(){setRecForm(!recForm);setERId(null)}} style=${{padding:"7px 14px",borderRadius:"var(--radius-xs)",border:"1px dashed rgba(168,85,247,0.4)",background:"rgba(168,85,247,0.06)",color:"var(--purple)",fontSize:11,fontWeight:700,cursor:"pointer"}}>${t("add_income")}</button>
-      </div>
-      ${recForm&&html`<div class="glass" style=${{padding:14,marginBottom:12,borderColor:"rgba(168,85,247,0.25)"}}>
-        <input class="inp-field" type="text" placeholder=${t("rec_ph")} value=${recLbl} onInput=${function(e){setRecLbl(e.target.value)}} onKeyDown=${function(e){submitOnEnter(e,addRec)}} style=${{marginBottom:8}}/>
-        <div style=${{display:"flex",gap:8,marginBottom:8}}>
-            <input class="inp-field" type="text" inputMode="decimal" placeholder=${t("amount_ph")} value=${recAmt} onInput=${function(e){setRecAmt(e.target.value.replace(/[^0-9.,]/g,""))}} onKeyDown=${function(e){submitOnEnter(e,addRec)}} style=${{flex:1,fontFamily:"var(--mono)",fontWeight:700}}/>
-          <div style=${{display:"flex",alignItems:"center",gap:6,padding:"10px 12px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--inp)"}}>
-            <span style=${{fontSize:11,color:"var(--sub)",fontWeight:600}}>${t("day_lbl")}</span>
-            <input type="number" min="1" max="31" value=${recDay} onInput=${function(e){setRecDay(e.target.value)}} onKeyDown=${function(e){submitOnEnter(e,addRec)}} style=${{width:36,background:"none",border:"none",color:"var(--txt)",fontSize:13,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
-          </div>
-        </div>
-        <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
-          ${cats.slice(0,8).map(function(c){var act=recCat===c.id;return html`<button key=${c.id} onClick=${function(){setRecCat(c.id)}} style=${{padding:"8px 4px",borderRadius:10,border:"2px solid "+(act?c.color:"transparent"),background:act?c.color+"18":"var(--card2)",fontSize:18,cursor:"pointer",boxShadow:act?"0 0 10px "+c.color+"44":"none"}}>${c.icon}</button>`})}
-        </div>
-        <div style=${{display:"flex",gap:8}}>
-          <button onClick=${addRec} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#7c3aed,#a855f7)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",boxShadow:"0 4px 16px var(--purpleglow)"}}>${t("save_btn")}</button>
-          <button onClick=${function(){setRecForm(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
-        </div>
-      </div>`}
-      ${recs.length===0&&!recForm&&html`<p style=${{color:"var(--dim)",fontSize:12,textAlign:"center",padding:"16px 0"}}>${t("no_recurring")}</p>`}
-      ${recs.map(function(r){var c=fc(r.category);var isPaid=(r.paidMonths||[]).includes(cMK);
-        if(eRId===r.id){return html`<div key=${r.id} style=${{borderRadius:"var(--radius-sm)",padding:14,background:"var(--bg3)",border:"2px solid var(--purple)",boxShadow:"0 0 0 4px var(--purpleglow)",marginBottom:6}}>
-          <input class="inp-field" type="text" value=${eRLbl} onInput=${function(e){setERLbl(e.target.value)}} onKeyDown=${function(e){submitOnEnter(e,saveEditRec)}} autoFocus style=${{marginBottom:8}}/>
-          <div style=${{display:"flex",gap:8,marginBottom:8}}>
-              <input class="inp-field" type="text" inputMode="decimal" value=${eRAmt} onInput=${function(e){setERAmt(e.target.value.replace(/[^0-9.,]/g,""))}} onKeyDown=${function(e){submitOnEnter(e,saveEditRec)}} style=${{flex:1,fontFamily:"var(--mono)",fontWeight:700}} placeholder=${t("amount_ph")}/>
-            <div style=${{display:"flex",alignItems:"center",gap:5,padding:"9px 12px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--inp)"}}>
-              <span style=${{fontSize:11,color:"var(--sub)"}}>${t("day_lbl")}</span>
-              <input type="number" min="1" max="31" value=${eRDay} onInput=${function(e){setERDay(e.target.value)}} onKeyDown=${function(e){submitOnEnter(e,saveEditRec)}} style=${{width:34,background:"none",border:"none",color:"var(--txt)",fontSize:12,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
-            </div>
-          </div>
-          <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:4,marginBottom:8}}>
-            ${cats.slice(0,8).map(function(cc){var act=eRCat===cc.id;return html`<button key=${cc.id} onClick=${function(){setERCat(cc.id)}} style=${{padding:"7px 4px",borderRadius:9,border:"2px solid "+(act?cc.color:"transparent"),background:act?cc.color+"18":"var(--card2)",fontSize:18,cursor:"pointer"}}>${cc.icon}</button>`})}
-          </div>
-          <div style=${{display:"flex",gap:6}}>
-            <button onClick=${saveEditRec} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#7c3aed,#a855f7)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save")}</button>
-            <button onClick=${function(){setERId(null)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
-          </div>
-        </div>`}
-        return html`<div key=${r.id} style=${{display:"flex",alignItems:"center",gap:10,padding:"11px 13px",borderRadius:"var(--radius-sm)",background:"var(--card)",border:"1px solid "+(isPaid?"var(--border)":"rgba(168,85,247,0.25)"),marginBottom:6,boxShadow:isPaid?"none":"0 2px 12px var(--purpleglow)"}}>
-          <div style=${{width:36,height:36,borderRadius:10,background:c.color+"20",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>${c.icon}</div>
-          <div style=${{flex:1,minWidth:0}}>
-            <span style=${{fontSize:12,fontWeight:700,display:"block",color:isPaid?"var(--sub)":"var(--txt)"}}>${r.label}</span>
-            <span class="num" style=${{fontSize:12,color:isPaid?"var(--green)":"var(--purple)"}}>${f(r.amount)}</span>
-            <span style=${{fontSize:10,color:"var(--dim)",display:"block",fontFamily:"var(--mono)"}}>${t("every_month")+" "+r.dayOfMonth+t("day_suffix")}</span>
-          </div>
-          ${isPaid?html`<span style=${{fontSize:19}}>✅</span>`:html`<span style=${{fontSize:10,fontWeight:700,background:"rgba(245,158,11,0.15)",color:"var(--amber)",padding:"3px 9px",borderRadius:20,letterSpacing:"0.04em",textTransform:"uppercase"}}>${t("pending")}</span>`}
-          <button onClick=${function(){startEditRec(r)}} style=${{color:"var(--dim)",fontSize:13,padding:"4px 5px",opacity:0.6}}>✏️</button>
-          <button onClick=${function(){delRec(r.id)}} style=${{color:"var(--dim)",fontSize:18,padding:"4px 5px"}}>×</button>
-        </div>`;
-      })}
-    </div>
+    <!-- Recurring (bu sekmede de yonetilebilir) -->
+    ${recurringSection()}
 
     <!-- Category Limits -->
     <p style=${{fontSize:13,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase",marginBottom:12}}>${t("cat_limits")}</p>
@@ -2465,7 +2697,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     </div>`})}
 
     <!-- Budget Profiles -->
-    <div style=${{marginTop:20,display:"none"}}>
+    <div style=${{marginTop:20}}>
       <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <p style=${{fontSize:13,fontWeight:700,color:"var(--sub)",letterSpacing:"0.06em",textTransform:"uppercase"}}>${t("budget_profile")}</p>
         <button onClick=${function(){setShowProf(!showProf);setProfName("")}} style=${{padding:"6px 12px",borderRadius:"var(--radius-xs)",border:"1px dashed rgba(99,102,241,0.4)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:11,fontWeight:700,cursor:"pointer"}}>${t("new_profile")}</button>
@@ -2504,7 +2736,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
         <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
           <div style=${{display:"flex",alignItems:"center",gap:8}}>
             <span style=${{fontSize:14}}>🤖</span>
-            <span style=${{fontSize:12,fontWeight:800,color:"var(--txt)"}}>${lang==="tr"?"MiniMax M3 Canlı Yorum":"MiniMax M3 Live Insight"}</span>
+            <span style=${{fontSize:12,fontWeight:800,color:"var(--txt)"}}>${lang==="tr"?"DeepSeek V4.1 Flash Canlı Yorum":"DeepSeek V4.1 Flash Live Insight"}</span>
             <span style=${{fontSize:9,fontWeight:800,padding:"3px 7px",borderRadius:999,background:"rgba(168,85,247,0.18)",border:"1px solid rgba(168,85,247,0.32)",color:"#d8b4fe",letterSpacing:"0.04em"}}>LIVE</span>
           </div>
           <div style=${{display:"flex",gap:6}}>
@@ -2519,14 +2751,14 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
         </div>`}
         ${aiLoading&&html`<div style=${{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderRadius:8,background:"rgba(168,85,247,0.08)",border:"1px solid rgba(168,85,247,0.18)",fontSize:11,color:"var(--sub)"}}>
           <div style=${{width:14,height:14,borderRadius:7,border:"2px solid rgba(168,85,247,0.3)",borderTopColor:"#a855f7",animation:"spin 0.8s linear infinite"}}/>
-          ${lang==="tr"?"MiniMax M3 düşünüyor…":"MiniMax M3 is thinking…"}
+          ${lang==="tr"?"DeepSeek V4.1 Flash düşünüyor…":"DeepSeek V4.1 Flash is thinking…"}
         </div>`}
         ${aiLive&&!aiLoading&&html`<div style=${{padding:"12px 14px",borderRadius:"var(--radius-sm)",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.06)"}}>
           <p style=${{fontSize:13,lineHeight:1.7,color:"var(--txt)",whiteSpace:"pre-wrap",marginBottom:8}}>${aiLive.text}</p>
           <p style=${{fontSize:9,color:"var(--dim)",fontWeight:600}}>${lang==="tr"?"Son güncelleme: ":"Last updated: "}${new Date(aiLive.ts).toLocaleTimeString(lang==="tr"?"tr-TR":"en-US",{hour:"2-digit",minute:"2-digit"})}</p>
         </div>`}
         ${!aiLive&&!aiLoading&&!aiErr&&html`<div style=${{padding:"10px 12px",borderRadius:8,background:"rgba(255,255,255,0.03)",border:"1px dashed var(--border)",fontSize:11,color:"var(--sub)",lineHeight:1.5}}>
-          ${lang==="tr"?'AI ile Yorumla butonuna basarak MiniMax M3\'e bu ayın harcamalarını yorumlatabilir, ya da AI\'ya Sor ile serbest soru sorabilirsin.':'Hit Analyze with AI to get a live MiniMax M3 reading, or Ask AI for any free-form question.'}
+          ${lang==="tr"?'AI ile Yorumla butonuna basarak DeepSeek V4.1 Flash\'e bu ayın harcamalarını yorumlatabilir, ya da AI\'ya Sor ile serbest soru sorabilirsin.':'Hit Analyze with AI to get a live DeepSeek V4.1 Flash reading, or Ask AI for any free-form question.'}
         </div>`}
       </div>
     ${monthlyInsights&&function(){
@@ -2851,7 +3083,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
           <span style=${{fontSize:18}}>💬</span>
           <div>
             <p style=${{fontSize:14,fontWeight:800,color:"var(--txt)"}}>${lang==="tr"?"AI'a Sor":"Ask AI"}</p>
-            <p style=${{fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"MiniMax M3 — bu ayın verilerine erişebilir":"MiniMax M3 — has access to this month's data"}</p>
+            <p style=${{fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"DeepSeek V4.1 Flash — bu ayın verilerine erişebilir":"DeepSeek V4.1 Flash — has access to this month's data"}</p>
           </div>
         </div>
         <div style=${{display:"flex",alignItems:"center",gap:6}}>
@@ -2897,7 +3129,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
           <span style=${{fontSize:18}}>🎤</span>
           <div>
             <p style=${{fontSize:14,fontWeight:800,color:"var(--txt)"}}>${lang==="tr"?"Sesli Sohbet":"Voice Chat"}</p>
-            <p style=${{fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"MiniMax M3 — canlı sesli asistan":"MiniMax M3 — live voice assistant"}</p>
+            <p style=${{fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"DeepSeek V4.1 Flash — canlı sesli asistan":"DeepSeek V4.1 Flash — live voice assistant"}</p>
           </div>
         </div>
         <div style=${{display:"flex",alignItems:"center",gap:6}}>
@@ -2905,16 +3137,16 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
             <span style=${{display:"inline-block",width:6,height:6,borderRadius:3,background:voiceLive?"var(--green)":"var(--sub)",animation:voiceLive?"pulse 1.2s infinite":"none"}}/>
             ${lang==="tr"?(voiceLive?"Live":"Kapalı"):(voiceLive?"Live":"Off")}
           </button>
-          <button onClick=${function(){setVoiceShowPicker(!voiceShowPicker)}} title=${lang==="tr"?"MinMax sesi seç":"Choose MinMax voice"} style=${{padding:"5px 9px",borderRadius:999,border:"1px solid rgba(168,85,247,0.32)",background:"rgba(168,85,247,0.18)",color:"#d8b4fe",fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-            🔊 <span style=${{fontSize:9,fontWeight:700,maxWidth:60,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${voiceMinMaxId.replace(/^English_|^Turkish_/,"")}</span>
+          <button onClick=${function(){setVoiceShowPicker(!voiceShowPicker)}} title=${lang==="tr"?"Ses seç":"Choose voice"} style=${{padding:"5px 9px",borderRadius:999,border:"1px solid rgba(168,85,247,0.32)",background:"rgba(168,85,247,0.18)",color:"#d8b4fe",fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
+            🔊 <span style=${{fontSize:9,fontWeight:700,maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${(voiceList.filter(function(v){return v.voiceURI===voiceSelectedURI})[0]||{}).name||(lang==="tr"?"Varsayılan ses":"Default voice")}</span>
           </button>
           <button onClick=${voiceClose} style=${{width:32,height:32,borderRadius:8,background:"var(--card)",border:"1px solid var(--border)",color:"var(--sub)",fontSize:18,cursor:"pointer"}}>×</button>
         </div>
       </div>
 
-      ${voiceShowPicker&&html`<div class="glass-sm fade-in" style=${{marginBottom:12,maxHeight:240,overflowY:"auto",padding:6,border:"1px solid rgba(168,85,247,0.22)"}}>
-        <div style=${{fontSize:10,color:"#d8b4fe",fontWeight:700,padding:"4px 8px 8px",letterSpacing:"0.04em",textTransform:"uppercase"}}>🎙️ MinMax Seslerinden Seç</div>
-        <div style=${{fontSize:9,color:"var(--sub)",padding:"0 8px 6px",lineHeight:1.4}}>${lang==="tr"?"M3 cevapları bu sesle okunacak. Yüksek kalite, doğal.":"M3's responses will use this voice. High quality, natural."}</div>
+      ${voiceShowPicker&&html`<div class="glass-sm fade-in" style=${{marginBottom:12,maxHeight:260,overflowY:"auto",padding:6,border:"1px solid rgba(168,85,247,0.22)"}}>
+        <div style=${{fontSize:10,color:"#d8b4fe",fontWeight:700,padding:"4px 8px 8px",letterSpacing:"0.04em",textTransform:"uppercase"}}>🎙️ ${lang==="tr"?"Cihazındaki Sesler":"Voices on Your Device"}</div>
+        <div style=${{fontSize:9,color:"var(--sub)",padding:"0 8px 6px",lineHeight:1.4}}>${lang==="tr"?"Yanıtlar tarayıcının sesli okuma motoruyla okunur (DeepSeek TTS sağlamaz). Liste boşsa işletim sisteminden Türkçe ses paketi kur.":"Replies are read by the browser's speech engine (DeepSeek provides no TTS). If the list is empty, install a Turkish voice pack in your OS."}</div>
         <div style=${{padding:"4px 8px 10px"}}>
           <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
             <span style=${{fontSize:9,color:"var(--sub)",fontWeight:700}}>${lang==="tr"?"⚡ Konuşma Hızı":"⚡ Speech Speed"}</span>
@@ -2925,35 +3157,15 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
             <span>0.5×</span><span>1×</span><span>2×</span>
           </div>
         </div>
-        <div style=${{fontSize:9,color:"var(--sub)",padding:"0 8px 6px",fontWeight:700}}>🇹🇷 TÜRKÇE</div>
-        ${[
-          {id:"Turkish_Trustworthyman",name:"Güvenilir Erkek",flag:"🇹🇷"},
-          {id:"Turkish_CalmWoman",name:"Sakin Kadın",flag:"🇹🇷"}
-        ].map(function(v){var act=voiceMinMaxId===v.id;return html`<button key=${v.id} onClick=${function(){setVoiceMinMaxId(v.id);try{localStorage.setItem("pk_voice_minmax",v.id)}catch(e){}setVoiceShowPicker(false)}} style=${{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"8px 10px",border:"none",background:act?"rgba(168,85,247,0.18)":"transparent",color:act?"#d8b4fe":"var(--txt)",fontSize:11,textAlign:"left",cursor:"pointer",borderRadius:8}}>
-          <span>${v.flag}</span>
-          <span style=${{flex:1,fontWeight:act?700:500}}>${v.name}</span>
-          <span style=${{fontSize:9,color:"var(--sub)"}}>${v.id}</span>
-          ${act?html`<span style=${{fontSize:12}}>✓</span>`:null}
-        </button>`})}
-        <div style=${{fontSize:9,color:"var(--sub)",padding:"8px 8px 6px",fontWeight:700}}>🇬🇧 İNGİLİZCE</div>
-        ${[
-          {id:"English_Steadymentor",name:"Güvenilir Rehber",flag:"🇬🇧"},
-          {id:"English_FriendlyPerson",name:"Samimi Adam",flag:"🇬🇧"},
-          {id:"English_radiant_girl",name:"İlham Veren Kız",flag:"🇬🇧"},
-          {id:"English_PassionateWarrior",name:"Tutkulu Savaşçı",flag:"🇬🇧"},
-          {id:"English_Comedian",name:"Komedyen",flag:"🇬🇧"},
-          {id:"English_SadTeen",name:"Genç Çocuk",flag:"🇬🇧"},
-          {id:"English_Aussie_Bloke",name:"Avustralyalı",flag:"🇬🇧"},
-          {id:"English_Graceful_Lady",name:"Zarif Hanımefendi",flag:"🇬🇧"},
-          {id:"English_Trustworth_Man",name:"Güvenilir Bay",flag:"🇬🇧"}
-        ].map(function(v){var act=voiceMinMaxId===v.id;return html`<button key=${v.id} onClick=${function(){setVoiceMinMaxId(v.id);try{localStorage.setItem("pk_voice_minmax",v.id)}catch(e){}setVoiceShowPicker(false)}} style=${{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"8px 10px",border:"none",background:act?"rgba(168,85,247,0.18)":"transparent",color:act?"#d8b4fe":"var(--txt)",fontSize:11,textAlign:"left",cursor:"pointer",borderRadius:8}}>
-          <span>${v.flag}</span>
-          <span style=${{flex:1,fontWeight:act?700:500}}>${v.name}</span>
-          <span style=${{fontSize:9,color:"var(--sub)"}}>${v.id}</span>
+        ${voiceList.length===0
+          ?html`<div style=${{padding:"10px 8px",fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"Ses listesi henüz boş (bazı tarayıcılar sesleri geç yükler).":"Voice list is empty yet (some browsers load voices lazily)."}</div>`
+          :voiceList.map(function(v,i){var hasSel=!!voiceSelectedURI;var act=hasSel?v.voiceURI===voiceSelectedURI:(i===0);return html`<button key=${(v.voiceURI||"v")+i} onClick=${function(){setVoiceSelectedURI(v.voiceURI||"");try{localStorage.setItem("pk_voice_uri",v.voiceURI||"")}catch(e){}}} style=${{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"8px 10px",border:"none",background:act?"rgba(168,85,247,0.18)":"transparent",color:act?"#d8b4fe":"var(--txt)",fontSize:11,textAlign:"left",cursor:"pointer",borderRadius:8}}>
+          <span>${/^tr/i.test(v.lang||"")?"🇹🇷":(/^en/i.test(v.lang||"")?"🇬🇧":"🌐")}</span>
+          <span style=${{flex:1,fontWeight:act?700:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${v.name}</span>
+          <span style=${{fontSize:9,color:"var(--sub)"}}>${v.lang||""}</span>
           ${act?html`<span style=${{fontSize:12}}>✓</span>`:null}
         </button>`})}
       </div>`}
-
       <div style=${{flex:1,overflowY:"auto",marginBottom:14,display:"flex",flexDirection:"column",gap:10,minHeight:200,maxHeight:"50vh"}}>
         ${voiceHistory.length===0&&!voiceTranscript&&!voiceAiText?html`<div style=${{padding:"20px 14px",borderRadius:"var(--radius-sm)",background:"rgba(16,185,129,0.06)",border:"1px dashed rgba(16,185,129,0.28)",textAlign:"center"}}>
           <p style=${{fontSize:11,color:"var(--sub)",lineHeight:1.6}}>${lang==="tr"?'🎤 Aşağıdaki mikrofona dokun ve Türkçe konuş. M3 cevap verecek. Live mod açıksa konuşma otomatik devam eder.':'🎤 Tap the mic and speak. M3 will respond. With Live mode on, the conversation continues automatically.'}</p>
@@ -3007,7 +3219,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
 
       ${aiLoading&&html`<div style=${{display:"flex",flexDirection:"column",alignItems:"center",gap:12,padding:"30px 20px"}}>
         <div style=${{width:36,height:36,borderRadius:18,border:"3px solid rgba(168,85,247,0.2)",borderTopColor:"#a855f7",animation:"spin 0.8s linear infinite"}}/>
-        <p style=${{fontSize:12,color:"var(--sub)",fontWeight:600}}>${lang==="tr"?"MiniMax M3 düşünüyor…":"MiniMax M3 is thinking…"}</p>
+        <p style=${{fontSize:12,color:"var(--sub)",fontWeight:600}}>${lang==="tr"?"DeepSeek V4.1 Flash düşünüyor…":"DeepSeek V4.1 Flash is thinking…"}</p>
       </div>`}
 
       ${aiPreVerdict&&!aiLoading&&html`<div>
@@ -3043,7 +3255,9 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
 
   </div>`;
 }
-ReactDOM.render(React.createElement(App),document.getElementById("root"));
+var _pkRoot=document.getElementById("root");
+if(ReactDOM.createRoot){ReactDOM.createRoot(_pkRoot).render(React.createElement(App));}
+else{ReactDOM.render(React.createElement(App),_pkRoot);}
 
 </script>
 </body>
