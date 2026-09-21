@@ -3,7 +3,28 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v11.1` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Sürüm:** `v11.2` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+
+## v11.2 — Drive senkron kurulumu tamamlandı + yer tutucu düzeltmesi
+
+Güvenli protokol (v11.1) canlıya alındı, uçtan uca doğrulandı ve kurulumun geri kalan kısmı tamamlandı:
+
+| # | Değişiklik | Ayrıntı |
+|---|---|---|
+| 1 | **Apps Script güncellendi ve yayınlandı** | Projedeki eski güvensiz script yerine depodaki `gas/Code.gs` yazıldı (script rev **3**). Sadece bir dağıtım değil, **kalan tüm etkin dağıtımlar** da yeni sürüme geçirildi — hiçbir eski/güvensiz uç açık bırakılmadı. |
+| 2 | **Gizli kelime (token) Script Properties'e taşındı** | En az 16 karakter zorunlu. Eski kısa örnek (`cosmic`, 6 karakter) artık sunucu tarafından kabul edilmiyor. |
+| 3 | **Yer tutucu düzeltildi** | Ayarlar → ☁️ Drive Senkron'daki yanıltıcı `cosmic` örneği yerine ≥16 karakterlik gerçekçi örnek: `para-takip-2026-K9m2xQ7p` (TR + EN). |
+
+### Doğrulama (yayındaki uçlarda)
+
+| Test | Beklenen | Sonuç |
+|---|---|---|
+| `POST {action:"ping"}` | `ok:true` | ✅ `{"ok":true,"rev":"3","hasData":…}` |
+| `POST {action:"get"}` | `ok:true` | ✅ `{"ok":true,"rev":"3","dataRev":…,"data":…}` |
+| `GET <url>?token=…` | `method_not_allowed` | ✅ `{"ok":false,"error":"method_not_allowed","rev":"3"}` |
+| `POST` yanlış token | `unauthorized` | ✅ `{"ok":false,"error":"unauthorized"}` |
+
+> **Kurulum notu:** Token değiştiği için uygulamada **⚙️ Ayarlar → ☁️ Drive Senkron** alanına yeni gizli kelime **bir kez** girilip **Kaydet**'e basılmalı, ardından **📡 Test** ile `✓ Güvenli protokol çalışıyor` görülmelidir. Sunucu tarafı boşsa (yeni protokol Script Properties kullanır; eski `parakontrol-data.json` artık okunmaz) uygulama **çakışma uyarısı** gösterir — veri kaybı olmaması için **"Yereli gönder"** seçilmelidir (yerel veri daha güncel kabul edilir).
 
 ## v11.1 — Google Drive senkronizasyonu güvenlik sertleştirmesi
 
