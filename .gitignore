@@ -5,6 +5,12 @@
 .DS_Store
 Thumbs.db
 
+# API anahtari iceren yerel dosyalar — ASLA commit edilmez
+# (publish.sh `git add -A` kullanir; anahtar sizmasin diye burada kapali)
+openrouter*.txt
+*api*key*.txt
+*api-key*.txt
+
 # Test / arac ciktilari
 node_modules/
 package-lock.json

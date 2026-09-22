@@ -3,7 +3,38 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v12.0` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Sürüm:** `v12.1` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+
+## v12.1 — Jev düzeltmesi: doğru uç nokta + doğrulanmış model slug'ı
+
+Jev katmanı `POST https://openrouter.ai/api/v1/systemone` adresine gidiyordu; **böyle bir uç yok**
+(HTTP 400 `invalid_union`) ve varsayılan model **`typesafe/jev-latest` OpenRouter'da bulunmuyor**
+(`400 Model typesafe/jev-latest does not exist`). Sonuç: Jev hiçbir zaman uzaktan karar döndüremiyor,
+her seferinde sessizce yerel çekirdeğe düşüyordu (`📡 Test` kırmızı). Düzeltmeler:
+
+| # | Sorun | Düzeltme |
+|---|---|---|
+| 1 | **Yanlış uç:** `/api/v1/systemone` (yok) | Doğru uç: **`https://openrouter.ai/api/alpha/decisions`**. Jev bir **decisions** modelidir; OpenRouter'ın kendi hatası bunu söyler: *"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead."* |
+| 2 | **Varsayılan model yok:** `typesafe/jev-latest` | Varsayılan **`typesafe/jev-1.13`** (canlı doğrulandı); yedek zinciri artık yalnızca **var olan** slug'lar: `typesafe/jev-1.13-20260917 → jev-1.13` |
+| 3 | TypeSafe doğrudan sağlayıcının modeli `jev-1.13` | Resmî dokümanla uyumlu **`jev-latest`** (yedek: `jev-1.13`) |
+| 4 | Proxy beyaz listesi (`gas/Code.gs`) aynı yanlış adresi taşıyordu | Proxy de `/api/alpha/decisions`'a gider; `SCRIPT_REV` **5** |
+| 5 | Öz-test eski (yanlış) ucu doğruluyordu | Self-test yeni ucu, "chat/completions **değil**" kuralını ve tüm slug'ların desen denetimini doğrular |
+| 6 | Ayar ekranındaki proxy ipucu "rev 4" diyordu | "rev 5" |
+
+### Canlı doğrulama (gerçek OpenRouter anahtarıyla, v12.1)
+
+| Test | Beklenen | Sonuç |
+|---|---|---|
+| `POST /api/alpha/decisions` + `typesafe/jev-1.13` | tipli `answers` | ✅ `{"model":"typesafe/jev-1.13-20260917","answers":{"alive":{"type":"noul","noul":0.75},"domain":{"type":"choice","choice":"other","confidence":0.47},"quality":{"type":"score","score":0.9,...}}}` |
+| `…/chat/completions` + `typesafe/jev-1.13` | reddedilir | ✅ `400` — *"…use the /api/alpha/decisions endpoint"* |
+| `POST /api/v1/systemone` (eski uç) | yok | ❌ `400 invalid_union` → **kök neden** |
+| Model `typesafe/jev-latest` | yok | ❌ `400 Model typesafe/jev-latest does not exist` |
+| CORS (tarayıcıdan doğrudan) | izinli | ✅ `access-control-allow-origin: *`; preflight `Authorization`, `Content-Type`, `HTTP-Referer`, `X-Openrouter-Title` başlıklarına izin veriyor |
+| Uygulama içi **← Ayarlar → Jev → 📡 Test** | yeşil | ✅ "Jev ÇALIŞIYOR" + `noul` / `choice` / `score` değerleri + model adı |
+| **🧪 Yerel çekirdek testi** | tümü yeşil | ✅ (yeni provider/uç kontrolleri dahil) |
+
+> **Not:** Tarayıcı CORS'u açık olduğu için **Taşıma = doğrudan** yeterlidir; Apps Script proxy'si yalnızca
+> anahtarı istemciden uzak tutmak isteyenler için opsiyoneldir (proxy kullanıyorsan `gas/Code.gs` rev 5'i yayınla).
 
 ## v12.0 — Hibrit yapay zekâ: DeepSeek (System 2) + Jev (System 1)
 
@@ -20,13 +51,15 @@ DeepSeek **akıl hocası** olarak kaldı: sohbet, aylık yorum, derin analiz, se
 
 ### Jev nereden çağrılıyor?
 
-**OpenRouter** hesabındaki API anahtarıyla: `POST https://openrouter.ai/api/v1/systemone`
-(model **`typesafe/jev-1.13`**). TypeSafe SDK'larıyla **aynı System One sözleşmesi** kullanılır, yani
-gövde `{state, model, questions}` → yanıt `{model, answers, usage}`. TypeSafe'a doğrudan bağlanmak
-da mümkündür (Ayarlar → Jev → sağlayıcı seçimi).
+**OpenRouter** hesabındaki API anahtarıyla: `POST https://openrouter.ai/api/alpha/decisions`
+(model **`typesafe/jev-1.13`**). Bu, Jev'in **decisions** ucudur (`chat/completions` bu modeli
+reddeder). Gövde `{state, model, questions}` → yanıt `{model, answers, usage}`. TypeSafe'a doğrudan
+bağlanmak da mümkündür (Ayarlar → Jev → sağlayıcı seçimi; uç `https://api.typesafe.ai/v1/systemone`,
+model `jev-latest`).
 
 > **Model slug'ları değişebilir.** Bu yüzden istemci sabit bir ada bağlı değil:
-> sıralı bir **yedek zinciri** var (`typesafe/jev-1.13 → jev-1.13 → typesafe/jev-latest → jev-latest`).
+> sıralı bir **yedek zinciri** var (`typesafe/jev-1.13 → typesafe/jev-1.13-20260917 → jev-1.13`;
+> bu üç slug da canlı olarak doğrulandı).
 > Bir slug `400 Model … does not exist` dönerse otomatik olarak sıradakine geçilir ve **çalışan slug
 > hatırlanır**. Ayarlar → Jev → **Model (slug)** alanından elle de yazabilirsin; "Uygula" dediğinde
 > yalnızca o slug denenir. Yani TypeSafe yeni sürüm yayınlarsa kod güncellemeden `typesafe/jev-1.14`
@@ -136,13 +169,13 @@ Ayarlar'daki **Son çağrı** satırı son denemenin kodunu, HTTP durumunu, ipuc
 
 | Kod / ipucu | Anlamı | Ne yapmalı |
 |---|---|---|
-| `network` + `cors_or_blocked` | Tarayıcı isteği engelledi (CORS) | Taşıma → **Apps Script proxy** (+ `Code.gs` rev 4 yayınla) |
+| `network` + `cors_or_blocked` | Tarayıcı isteği engelledi (CORS) | Taşıma → **Apps Script proxy** (+ `Code.gs` rev 5 yayınla) |
 | `network` + `offline` | Gerçekten çevrimdışısın | Bağlantı gelince tekrar dene |
 | `unauthorized` + `key` | Anahtar reddedildi (401/403) | openrouter.ai/keys'ten yeni anahtar |
 | `http_error` + `model_not_found` | Model slug'ı yok (400) | Model alanına geçerli slug yaz (`typesafe/jev-1.13`) — yedek zinciri zaten otomatik denedi |
 | `http_error` + `credits` | Kredi/limit yetersiz (402) | Panelden kredi veya anahtar limiti |
 | `http_error` + `rate` | Çok fazla istek (429) | Biraz bekleyip tekrar dene |
-| `gas_error` / `gas_proxy_not_configured` | Proxy kurulu değil | Drive Senkron URL+token gir, rev 4'ü yayınla |
+| `gas_error` / `gas_proxy_not_configured` | Proxy kurulu değil | Drive Senkron URL+token gir, rev 5'i yayınla |
 | `bad_json` | Yanıt okunamadı | Genelde geçici; yerel karar devrede kalır |
 | `timeout` | 6 sn içinde yanıt yok | Tekrar dene ya da `local` moda geç |
 
@@ -301,7 +334,7 @@ cd /tmp/smoke && node test.js && node test-sync.js && node test-jev.js   # jsdom
 
 - Tek `index.html` → ilk yükleme ~250 KB; React/htm/grafikler CDN'den gelir. İnternet yoksa uygulama açılmaz.
 - Grafikler ve Excel dışa aktarma CDN'e bağlıdır.
-- Uygulama tamamen istemci tarafıdır: sunucu yok, AI istekleri doğrudan tarayıcıdan DeepSeek'e (sohbet/analiz) ve Jev için OpenRouter'a (`api/v1/systemone`) gider; fiyatlandırma/limitler sağlayıcılara aittir.
+- Uygulama tamamen istemci tarafıdır: sunucu yok, AI istekleri doğrudan tarayıcıdan DeepSeek'e (sohbet/analiz) ve Jev için OpenRouter'a (`api/alpha/decisions`) gider; fiyatlandırma/limitler sağlayıcılara aittir.
   Anahtarı istemciden uzak tutmak istersen **Ayarlar → Jev → Taşıma → Apps Script proxy** kullanılabilir (DeepSeek için böyle bir proxy yok).
 - Jev kararları **öneri**dir: yerel çekirdek kural tabanlıdır (kalibre edilmemiş), API yanıtı ise kalibre olasılık taşır. `source` alanı hangi motorun karar verdiğini gösterir. Butce/para hesabı her zaman koddan gelir.
 - Veri kaybına karşı düzenli olarak **Ayarlar → 💾 Veri → JSON Yedek Al** kullanman önerilir.

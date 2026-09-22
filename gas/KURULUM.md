@@ -103,7 +103,9 @@ Kurallar:
 ## Jev (System One) proxy'si — isteğe bağlı
 
 Jev, **OpenRouter** anahtarınla da çağrılabilir: uygulama varsayılan olarak
-`POST https://openrouter.ai/api/v1/systemone` adresine gider (model `typesafe/jev-1.13`).
+`POST https://openrouter.ai/api/alpha/decisions` adresine gider (model `typesafe/jev-1.13`).
+Bu, Jev'in **decisions** ucudur; `chat/completions` bu modeli reddeder
+(`"... is a decisions model ... Use the /api/alpha/decisions endpoint"`).
 Tarayıcıdan çıkan bir anahtar sızabileceği için OpenRouter panelinden anahtara **harcama
 limiti** koy ya da isteği bu Apps Script üzerinden geçir.
 

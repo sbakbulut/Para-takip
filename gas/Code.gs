@@ -29,7 +29,11 @@
  *  - Jev anahtari (body.jevKey) SADECE istek icinde gecer; hicbir yere
  *    yazilmaz, log'a basilmaz, yanitta geri dondurulmez.
  *  - Istek govdesi boyut siniri MAX_BYTES'tir.
- *  - Yalnizca https://api.typesafe.ai adresine cikilir (SSRF kapali).
+ *  - Yalnizca beyaz listedeki iki adrese cikilir (SSRF kapali):
+ *      openrouter -> https://openrouter.ai/api/alpha/decisions
+ *      typesafe   -> https://api.typesafe.ai/v1/systemone
+ *    NOT: Jev bir "decisions" modelidir; OpenRouter'da /chat/completions
+ *    bu modeli reddeder, dogru uc /api/alpha/decisions'tir.
  */
 
 var PROP_DATA = "data";
@@ -39,11 +43,13 @@ var PROP_RATE = "rate";
 var MIN_TOKEN_LEN = 16;
 var MAX_BYTES = 1000000;   // 1 MB
 var RATE_LIMIT = 60;       // istek / dakika
-var SCRIPT_REV = "4";      // protokol sürümü (uygulama bunu doğrular)
+var SCRIPT_REV = "5";      // protokol sürümü (uygulama bunu doğrular)
 /* Jev proxy: yalnizca bu iki adrese cikilir (SSRF kapali).
-   Istemci "provider" alanini secer; URL istemciden ALINMAZ. */
+   Istemci "provider" alanini secer; URL istemciden ALINMAZ.
+   OpenRouter'da Jev bir "decisions" modelidir: /chat/completions DEGIL,
+   /api/alpha/decisions kullanilir. */
 var JEV_ENDPOINTS = {
-  openrouter: "https://openrouter.ai/api/v1/systemone",
+  openrouter: "https://openrouter.ai/api/alpha/decisions",
   typesafe: "https://api.typesafe.ai/v1/systemone"
 };
 var JEV_TIMEOUT_MS = 15000;

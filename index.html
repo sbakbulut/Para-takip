@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v12.0</title>
+<title>Para Kontrol v12.1</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="12.0";
+var APP_VERSION="12.1";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -427,9 +427,13 @@ async function callDeepSeekAI(messages,lang){
    (choice / noul / score + kalibre olasilik), arka plan taramalari.
 
    API — iki saglayici, AYNI "System One" sozlesmesi:
-     OpenRouter (varsayilan): POST https://openrouter.ai/api/v1/systemone
-       Authorization: Bearer sk-or-v1-...   model: "typesafe/jev-latest"
+     OpenRouter (varsayilan): POST https://openrouter.ai/api/alpha/decisions
+       Authorization: Bearer sk-or-v1-...   model: "typesafe/jev-1.13"
        (+ istege bagli atif basliklari: HTTP-Referer, X-OpenRouter-Title)
+       DIKKAT: Jev bir "decisions" modelidir; chat/completions ucu REDDEDER:
+         "typesafe/jev-1.13 is a decisions model and cannot be used with the
+          chat/completions endpoint. Use the /api/alpha/decisions endpoint."
+       Yani Jev icin DOGRU uc /api/alpha/decisions'tir (/api/v1/systemone yok).
      TypeSafe (dogrudan):     POST https://api.typesafe.ai/v1/systemone
        Authorization: Bearer <ts-key>       model: "jev-latest"
      Ortak govde:   {model, state:<nesne|metin>, questions:{...}}
@@ -465,17 +469,20 @@ var JEV_MODEL_OK_KEY="pk_jev_model_ok";   /* en son BASARILI olan model (hizli y
 var JEV_CACHE_KEY="pk_jev_cache";         /* son cagri teshis bilgisi */
 
 /* Saglayicilar: ikisi de AYNI "System One" sozlesmesini kullanir
-   (state + questions -> tipli answers). OpenRouter, TypeSafe SDK'lariyla
-   uyumlu bir /systemone ucu sunar; bu yuzden ayni tipli katman isler.
+   (state + questions -> tipli answers).
+   - OpenRouter (varsayilan): decisions ucu /api/alpha/decisions.
+     Jev bir "decisions" modelidir; /chat/completions bu modeli reddeder.
+     Dogrulanan slug: "typesafe/jev-1.13" ("typesafe/jev-latest" YOK).
+   - TypeSafe (dogrudan): /v1/systemone + model "jev-latest" (resmi dokuman).
    NOT: model slug'lari degisebilir; bu yuzden "modelFallbacks" sirali
-   yedek listesi var ve model yoksa (400) otomatik sonrakine gecilir. */
+   yedek listesi var ve model yoksa (400 "does not exist") otomatik gecilir. */
 var JEV_PROVIDERS={
   openrouter:{
     id:"openrouter",
     label:"OpenRouter",
-    endpoint:"https://openrouter.ai/api/v1/systemone",
+    endpoint:"https://openrouter.ai/api/alpha/decisions",
     model:"typesafe/jev-1.13",
-    modelFallbacks:["jev-1.13","typesafe/jev-latest","jev-latest"],
+    modelFallbacks:["typesafe/jev-1.13-20260917","jev-1.13"],
     keyHint:"sk-or-v1-...",
     consoleURL:"https://openrouter.ai/keys",
     modelURL:"https://openrouter.ai/models?q=jev",
@@ -486,8 +493,8 @@ var JEV_PROVIDERS={
     id:"typesafe",
     label:"TypeSafe (dogrudan)",
     endpoint:"https://api.typesafe.ai/v1/systemone",
-    model:"jev-1.13",
-    modelFallbacks:["jev-latest"],
+    model:"jev-latest",
+    modelFallbacks:["jev-1.13"],
     keyHint:"ts-...",
     consoleURL:"https://console.typesafe.ai/keys",
     modelURL:"https://docs.typesafe.ai",
@@ -531,8 +538,8 @@ function jevIsModelMissing(status,detail,txt){
 
 var JEV_CONFIG={
   provider:"openrouter",
-  endpoint:"https://openrouter.ai/api/v1/systemone",
-  model:"typesafe/jev-latest",
+  endpoint:"https://openrouter.ai/api/alpha/decisions",
+  model:"typesafe/jev-1.13",
   modelLabel:"Jev (TypeSafe System One)",
   apiKey:"",
   keyMode:"device",
@@ -2076,19 +2083,25 @@ function jevSelfTest(lang){
   t("devir istemi baglam iceriyor",prompt.indexOf("budget_projection")!==-1&&prompt.indexOf("projected")!==-1);
 
   /* 9) Saglayici (OpenRouter / TypeSafe) cozumleme */
-  t("saglayici: openrouter endpoint",JEV_PROVIDERS.openrouter.endpoint==="https://openrouter.ai/api/v1/systemone");
+  t("saglayici: openrouter endpoint decisions ucu",JEV_PROVIDERS.openrouter.endpoint==="https://openrouter.ai/api/alpha/decisions");
+  t("saglayici: openrouter chat/completions DEGIL",JEV_PROVIDERS.openrouter.endpoint.indexOf("chat/completions")===-1);
   t("saglayici: openrouter gecerli model slug",JEV_PROVIDERS.openrouter.model==="typesafe/jev-1.13",JEV_PROVIDERS.openrouter.model);
   t("saglayici: openrouter yedek model listesi var",(JEV_PROVIDERS.openrouter.modelFallbacks||[]).length>0);
+  t("saglayici: tum slug'lar gecerli desen",(function(){
+    var all=[JEV_PROVIDERS.openrouter.model].concat(JEV_PROVIDERS.openrouter.modelFallbacks||[])
+      .concat([JEV_PROVIDERS.typesafe.model]).concat(JEV_PROVIDERS.typesafe.modelFallbacks||[]);
+    return all.every(function(m){return /^(typesafe\/)?jev-[a-z0-9.\-]+$/i.test(m)});
+  })());
   t("saglayici: typesafe endpoint",JEV_PROVIDERS.typesafe.endpoint==="https://api.typesafe.ai/v1/systemone");
   var prevProv=JEV_CONFIG.provider;
   jevSetModelOverride("");
   jevSetProvider("openrouter");
-  t("saglayici: openrouter secilince endpoint",jevEndpoint()==="https://openrouter.ai/api/v1/systemone",jevEndpoint());
+  t("saglayici: openrouter secilince endpoint",jevEndpoint()==="https://openrouter.ai/api/alpha/decisions",jevEndpoint());
   t("saglayici: openrouter secilince model",jevModelId()==="typesafe/jev-1.13",jevModelId());
   t("saglayici: aday listesi ilk ogesi varsayilan",jevModelCandidates()[0]==="typesafe/jev-1.13",jevModelCandidates().join(" > "));
   jevSetProvider("typesafe");
   t("saglayici: typesafe secilince endpoint",jevEndpoint()==="https://api.typesafe.ai/v1/systemone",jevEndpoint());
-  t("saglayici: typesafe secilince model",jevModelId()==="jev-1.13",jevModelId());
+  t("saglayici: typesafe secilince model",jevModelId()==="jev-latest",jevModelId());
   t("saglayici: bilinmeyen id yok sayilir",(function(){jevSetProvider("yok");return jevProvider()==="typesafe"})());
   jevSetProvider(prevProv);
   t("saglayici: geri yuklendi",jevEndpoint()===JEV_PROVIDERS[jevProvider()].endpoint);
@@ -4559,7 +4572,7 @@ function App(){
         ${(jevLastTest.hint==="key")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Anahtar reddedildi. openrouter.ai/keys adresinden yeni bir anahtar oluşturup tekrar dene.":"Key rejected. Create a fresh key at openrouter.ai/keys and retry."}</div>`}
         ${(jevLastTest.hint==="credits")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Kredi/limit yetersiz. OpenRouter panelinden anahtara limit veya hesaba kredi ekle.":"Insufficient credits/limit. Add a key limit or account credits in the OpenRouter dashboard."}</div>`}
         ${(jevLastTest.hint==="offline")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Çevrimdışısın. Bağlantı gelince tekrar dene.":"You are offline. Retry once you are back online."}</div>`}
-        ${(jevLastTest.hint==="proxy")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Proxy kurulu değil. Önce Drive Senkron URL+token gir ve gas/Code.gs'in yeni sürümünü yayınla (rev 4).":"Proxy not set up. Fill Drive Sync URL+token and deploy the new gas/Code.gs (rev 4)."}</div>`}
+        ${(jevLastTest.hint==="proxy")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Proxy kurulu değil. Önce Drive Senkron URL+token gir ve gas/Code.gs'in yeni sürümünü yayınla (rev 5).":"Proxy not set up. Fill Drive Sync URL+token and deploy the new gas/Code.gs (rev 5)."}</div>`}
         ${(jevLastTest.hint==="model_not_found")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?("Model slug'i yok. Yukarıdaki Model alanına geçerli bir slug yaz (örn. typesafe/jev-1.13) ve Uygula'ya bas; yedek zinciri de denendi: "+(jevLastTest.modelTried||[]).join(" → ")):("Model slug missing. Enter a valid slug in the Model field above (e.g. typesafe/jev-1.13) and press Apply; the fallback chain was also tried: "+(jevLastTest.modelTried||[]).join(" → "))}</div>`}
       </div>`}
       ${last&&html`<div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Son çağrı: ":"Last call: "}${String(last.code||"ok")}${last.httpStatus?(" · HTTP "+last.httpStatus):""}${last.hint?(" · "+last.hint):""} · ${String(last.latencyMs||0)} ms${last.ok?"":(lang==="tr"?" (başarısız)":" (failed)")}${last.ts?(" · "+new Date(last.ts).toLocaleTimeString(lang==="tr"?"tr-TR":"en-US",{hour:"2-digit",minute:"2-digit"})):""}</div>`}
