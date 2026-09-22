@@ -426,10 +426,15 @@ async function callDeepSeekAI(messages,lang){
    Jev  "System 1" olarak eklenir: milisaniyelik kararlar, TIPLI cikti
    (choice / noul / score + kalibre olasilik), arka plan taramalari.
 
-   API (TypeSafe): POST https://api.typesafe.ai/v1/systemone
-     Authorization: Bearer <key>
-     body: {model:"jev-latest", state:<nesne|metin>, questions:{...}}
-     yanit: {model, answers:{...}, usage}  -> metin URETMEZ, tip hatasi yapmaz
+   API — iki saglayici, AYNI "System One" sozlesmesi:
+     OpenRouter (varsayilan): POST https://openrouter.ai/api/v1/systemone
+       Authorization: Bearer sk-or-v1-...   model: "typesafe/jev-latest"
+       (+ istege bagli atif basliklari: HTTP-Referer, X-OpenRouter-Title)
+     TypeSafe (dogrudan):     POST https://api.typesafe.ai/v1/systemone
+       Authorization: Bearer <ts-key>       model: "jev-latest"
+     Ortak govde:   {model, state:<nesne|metin>, questions:{...}}
+     Ortak yanit:   {model, answers:{...}, usage}
+     -> Metin URETMEZ, tip hatasi yapmaz. Saglayici: JEV_PROVIDERS / jevSetProvider()
 
    NEDEN IKI MOTOR?
    - "typesafe": gercek Jev API'si. Tur 70-500 ms ve tarayicidan yapilan
