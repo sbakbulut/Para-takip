@@ -100,8 +100,33 @@ Kurallar:
 - Beklenen sonuç: ping/get ok:true, GET ?token= -> method_not_allowed, yanlış token -> unauthorized.
 ```
 
-## Alternatif: Google istemiyorsan (GitHub Gist senkronu)
+## Jev (System One) proxy'si — isteğe bağlı
 
+Jev, **OpenRouter** anahtarınla da çağrılabilir: uygulama varsayılan olarak
+`POST https://openrouter.ai/api/v1/systemone` adresine gider (model `typesafe/jev-latest`).
+Tarayıcıdan çıkan bir anahtar sızabileceği için OpenRouter panelinden anahtara **harcama
+limiti** koy ya da isteği bu Apps Script üzerinden geçir.
+
+Yukarıdaki `gas/Code.gs` sürümü `"jev"` action'ını içerir. Kurulumu aynıdır (Adım 1–2);
+tek fark uygulamada **Ayarlar → Jev → Taşıma** seçimini **Apps Script proxy** yapman.
+
+| Adım | Yapılacak |
+|---|---|
+| 1 | `gas/Code.gs`'in **yeni** sürümünü editöre yapıştır, kaydet (Ctrl+S) |
+| 2 | **Deploy → Manage deployments → ✏️ → Version: New version → Deploy** |
+| 3 | Uygulama → **Ayarlar → Jev** → OpenRouter anahtarını gir → **Kaydet** |
+| 4 | **Taşıma** → *Apps Script proxy* seç |
+| 5 | **📡 Test** → "Jev yanit verdi (… ms)" görmelisin |
+
+Güvenlik notları (proxy tarafı):
+
+- İstek gövdesi: `{action:"jev", token, jevKey, provider, request:{model,state,questions}}`.
+- **Hedef adres istemciden alınmaz**; sunucuda beyaz listedir (`openrouter` / `typesafe`) → SSRF kapalı.
+- `model` alanı da beyaz listedir (`typesafe/jev-latest`, `typesafe/jev-1.13`, `jev-latest`, `jev-1.13`).
+- `jevKey` yalnızca istek içinde geçer; Script Properties'e **yazılmaz**, yanıtta **geri döndürülmez**, log'a basılmaz.
+- Gövde sınırı 200 KB; dakikada 60 istek; `401/403 → unauthorized`, `429 → rate_limited`, `402 → insufficient_credits`.
+
+## Alternatif: Google istemiyorsan (GitHub Gist senkronu)
 Apps Script/Google ile hiç uğraşmak istemiyorsan senkron, GitHub Gist üzerinden kurulabilir:
 
 - Depolama: gizli (secret) bir Gist içindeki JSON dosyası
