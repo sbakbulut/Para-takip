@@ -108,8 +108,39 @@ Veri değiştikçe (debounce + `requestIdleCallback`) çalışan, ağsız ve ~1 
   (token gövdede, URL'de asla; hedef adres sunucuda beyaz listedir — SSRF kapalı).
   Proxy için `gas/Code.gs`'in bu sürümünü yayınla: script rev **3 → 4** (`jev` action'ı eklendi).
 - Anahtar yoksa ağ çağrısı **hiç** yapılmaz; her şey yerel çekirdekle anında sonuçlanır.
-- Doğrulama: Ayarlar → Jev → **📡 Test** (gerçek çağrı + gecikme) ve **🧪 Yerel çekirdek testi**
-  (49 kontrol, ağsız). `index.html?testjev=1` de aynı self-test'i ekranda çalıştırır.
+- Doğrulama: Ayarlar → Jev → **📡 Test** (gerçek çağrı + adım adım teşhis) ve **🧪 Yerel çekirdek testi**
+  (53 kontrol, ağsız). `index.html?testjev=1` de aynı self-test'i ekranda çalıştırır.
+
+### Jev'in çalıştığını nasıl anlarım?
+
+Üç kademeli doğrulama — üçü de bağımsız kanıt verir:
+
+| # | Nerede | Ne görmelisin |
+|---|---|---|
+| 1 | **Ayarlar → Jev → 📡 Test** | Yeşil **“✓ Jev ÇALIŞIYOR — xxx ms”** + adım listesi (anahtar okundu → istek gönderildi → JSON ayrıştırıldı → tipli cevaplar doğrulandı) + `noul`/`choice`/`score` değerleri. Kırmızı ✗ varsa teşhis **hangi adımda koptuğunu ve ne yapılacağını** yazar. |
+| 2 | **Ayarlar → Jev → 🧪 Yerel çekirdek testi** | `✓ 53/53` — ağsız çalışır, yani anahtar/CORS sorunundan bağımsız olarak kodun sağlam olduğunu kanıtlar. |
+| 3 | **Harcama sekmesi (canlı davranış)** | Büyük bir tutar yaz → uyarı kutusunun sağ üstündeki etikete bak: **`jev %78`** = karar Jev API'sinden geldi, **`yerel kural`** = cihaz içi çekirdek (ağ yok/anahtar yok/CORS). |
+
+Ek olarak **Özet** sekmesinde `🛰️ Jev Arka Plan Taraması` kartı ve sekme çubuğunda anomali rozeti
+görünür — bunlar yerel çekirdekle her zaman çalışır.
+
+Ayarlar'daki **Son çağrı** satırı son denemenin kodunu, HTTP durumunu, ipucunu ve süresini gösterir
+(örn. `network · cors_or_blocked · 42 ms`). Anlamları:
+
+| Kod / ipucu | Anlamı | Ne yapmalı |
+|---|---|---|
+| `network` + `cors_or_blocked` | Tarayıcı isteği engelledi (CORS) | Taşıma → **Apps Script proxy** (+ `Code.gs` rev 4 yayınla) |
+| `network` + `offline` | Gerçekten çevrimdışısın | Bağlantı gelince tekrar dene |
+| `unauthorized` + `key` | Anahtar reddedildi (401/403) | openrouter.ai/keys'ten yeni anahtar |
+| `http_error` + `credits` | Kredi/limit yetersiz (402) | Panelden kredi veya anahtar limiti |
+| `http_error` + `rate` | Çok fazla istek (429) | Biraz bekleyip tekrar dene |
+| `gas_error` / `gas_proxy_not_configured` | Proxy kurulu değil | Drive Senkron URL+token gir, rev 4'ü yayınla |
+| `bad_json` | Yanıt okunamadı | Genelde geçici; yerel karar devrede kalır |
+| `timeout` | 6 sn içinde yanıt yok | Tekrar dene ya da `local` moda geç |
+
+**Anahtar güvenliği:** teşhis çıktısı anahtarı **asla** göstermez; yalnızca türü ve uzunluğu
+(`OpenRouter (sk-or-v1-) · 73 karakter`) raporlanır. Bu, testle de doğrulanır.
+
 
 ## v11.2 — Drive senkron kurulumu tamamlandı + yer tutucu düzeltmesi
 
@@ -252,7 +283,7 @@ python3 -m http.server 8080      # http://localhost:8080
 
 - `test.js` — render, sekme geçişleri, gizli bölümler, `parseNum`/`fmt`, PIN (SHA-256 + 5 deneme kilidi), DeepSeek istek gövdesi (thinking on/off, 401 mesajı, `reasoning_content`), `sanitizeRemote` (CSS injection / tip / limit), `remoteSuspicious`, güvenli Drive protokolü.
 - `test-sync.js` — Drive senaryoları: boş uzak veri → çakışma onayı (yerel veri korunur), geçerli uzak veri → uygulama + anlık görüntü, "Yereli gönder" ile uzak veriyi ezme, `📡 Test` çıktısı, eski zayıf script için GÜVENLİK uyarısı.
-- `test-jev.js` — Jev hibrit katmanı (89 kontrol): OpenRouter endpoint/model/başlıkları, tipli cevap doğrulama (küme dışı seçim · aralık dışı olasılık reddi), `jevParseLoose` dayanıklılığı, güven formülü, risk kapısı (`isAllowed`/`riskLevel`/`deficitAmount`, "izin genişletilemez" kuralı), kategorizasyon (marka→kategori, TR tutar biçimleri, "harcama değil" reddi, kişisel geçmiş öğrenmesi), olasılık testleri (Poisson/Wilson/Welch/modified-z), ağ hatası & bozuk JSON'da throw etmeme, `sanitizeRemote` beyaz listesi, ayarlar UI'si, arayüzde anlık uyarı ve self-test paneli.
+- `test-jev.js` — Jev hibrit katmanı (101 kontrol): OpenRouter endpoint/model/başlıkları, tipli cevap doğrulama (küme dışı seçim · aralık dışı olasılık reddi), `jevParseLoose` dayanıklılığı, güven formülü, risk kapısı (`isAllowed`/`riskLevel`/`deficitAmount`, "izin genişletilemez" kuralı), kategorizasyon (marka→kategori, TR tutar biçimleri, "harcama değil" reddi, kişisel geçmiş öğrenmesi), olasılık testleri (Poisson/Wilson/Welch/modified-z), ağ hatası & bozuk JSON'da throw etmeme, `sanitizeRemote` beyaz listesi, ayarlar UI'si, arayüzde anlık uyarı, self-test paneli ve **📡 Test teşhis akışı** (adım adım sonuç, hata ipuçları, anahtarın maskelenmesi/sızmaması).
 
 ```bash
 cd /tmp/smoke && node test.js && node test-sync.js && node test-jev.js   # jsdom + yerel React kopyaları gerekir

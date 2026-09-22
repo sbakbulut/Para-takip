@@ -752,7 +752,10 @@ async function jevHttp(bodyRaw){
       var detail="";
       var eo=jevParseLoose(text);
       if(eo&&eo.error)detail=String(eo.error.message||JSON.stringify(eo.error));
-      throw new Error("http_"+(resp.status||"")+(detail?(":"+detail.slice(0,160)):""));
+      var herr=new Error("http_"+(resp.status||"")+(detail?(":"+detail.slice(0,160)):""));
+      herr.jevStatus=resp.status||0;
+      herr.jevDetail=String(detail||text||"").slice(0,400);
+      throw herr;
     }
     return text;
   }finally{
@@ -785,16 +788,36 @@ async function jevAskRemote(state,questions,lang){
   }catch(e){
     var ms2=jevMs(t0);
     var msg=String((e&&e.message)||e||"");
+    var httpStatus=(e&&e.jevStatus)||0;
+    var detail=String((e&&e.jevDetail)||"").slice(0,400);
     var code=/abort/i.test(msg)?"timeout":(/gas_proxy_not_configured/.test(msg)?"gas_proxy_not_configured":(/gas_bad_response|^gas_/.test(msg)?"gas_error":(/^http_40[13]/.test(msg)?"unauthorized":(/^http_/.test(msg)?"http_error":"network"))));
+    /* Tarayicida "network" hatasi neredeyse her zaman CORS/engelleme ya da
+       gercek cevrimdisiliktir; ikisini ayirt etmek icin onLine'a bakilir. */
+    var online=true;
+    try{online=(typeof navigator==="undefined")?true:(navigator.onLine!==false)}catch(e2){}
+    var hint="";
+    if(code==="timeout")hint="timeout";
+    else if(code==="unauthorized")hint="key";
+    else if(code==="gas_proxy_not_configured"||code==="gas_error")hint="proxy";
+    else if(code==="bad_json")hint="json";
+    else if(code==="api_error")hint="api";
+    else if(code==="http_error")hint=(httpStatus===402)?"credits":((httpStatus===429)?"rate":"http"+(httpStatus||""));
+    else hint=online?"cors_or_blocked":"offline";
+
     var human;
     if(code==="timeout")human=tr?"Jev zaman asimina ugradi; yerel karar kullanildi.":"Jev timed out; local decision used.";
     else if(code==="gas_proxy_not_configured")human=tr?"Proxy icin once Drive Senkron ayarlarini doldur.":"Fill in Drive Sync settings first to use the proxy.";
-    else if(code==="unauthorized")human=tr?"Jev anahtari reddedildi (401/403). Ayarlardan kontrol et.":"Jev rejected the key (401/403). Check Settings.";
+    else if(code==="unauthorized")human=tr?"Anahtar reddedildi (401/403). Anahtar dogru hesapla olusturulmus mu?":"Key rejected (401/403). Was the key created on the right account?";
     else if(code==="gas_error")human=tr?"Proxy hatasi: "+msg.slice(0,120):"Proxy error: "+msg.slice(0,120);
+    else if(code==="api_error")human=msg.slice(0,200);
+    else if(code==="http_error"&&httpStatus===402)human=tr?"OpenRouter bakiyesi/limiti yetersiz (402). Panelden kredi veya anahtar limitini kontrol et.":"OpenRouter balance/limit insufficient (402). Check credits or the key limit in the dashboard.";
+    else if(code==="http_error"&&httpStatus===429)human=tr?"Cok fazla istek (429). Biraz bekleyip tekrar dene.":"Too many requests (429). Wait a moment and retry.";
     else if(code==="http_error")human=msg.slice(0,200);
-    else human=tr?"Jev'e ulasilamadi (ag/CORS); yerel karar kullanildi.":"Could not reach Jev (network/CORS); local decision used.";
-    jevCacheWrite({ok:false,engine:"typesafe",code:code,latencyMs:ms2,ts:Date.now()});
-    return jevFail("typesafe",code,human,{latencyMs:ms2});
+    else if(hint==="cors_or_blocked")human=tr?"Istek tarayicidan engellendi (CORS olabilir). Ayarlar -> Jev -> Tasima: 'Apps Script proxy' sec ve tekrar dene.":"The request was blocked by the browser (likely CORS). Set Settings -> Jev -> Transport to 'Apps Script proxy' and retry.";
+    else human=tr?"Cevrimdisi gorunuyorsun; yerel karar kullanildi.":"You appear to be offline; local decision used.";
+
+    jevCacheWrite({ok:false,engine:"typesafe",code:code,hint:hint,httpStatus:httpStatus,latencyMs:ms2,ts:Date.now()});
+    return jevFail("typesafe",code,human,{latencyMs:ms2,hint:hint,httpStatus:httpStatus,detail:detail});
   }
 }
 
@@ -1987,33 +2010,96 @@ function jevSelfTest(lang){
   jevSetProvider(prevProv);
   t("saglayici: geri yuklendi",jevEndpoint()===JEV_PROVIDERS[jevProvider()].endpoint);
 
+  /* 10) Anahtar teshisi: TAM anahtar hicbir zaman gorunmez */
+  var fakeKey="sk-or-v1-abcdef1234567890abcdef1234567890";
+  var masked=jevMaskKey(fakeKey);
+  t("teshis: anahtar maskelendi (sizinti yok)",masked.indexOf("abcdef1234567890")===-1,masked);
+  t("teshis: sadece tur + uzunluk",masked.indexOf("OpenRouter")!==-1&&masked.indexOf(String(fakeKey.length))!==-1,masked);
+  t("teshis: bos anahtar 'yok'",jevMaskKey("")==="yok");
+  t("teshis: yabanci onek bildirilir",jevMaskKey("abc123").indexOf("taninmayan")!==-1);
+
   return r;
 }
 
+/* Anahtar TESHISI icin maskeli ozet: tam anahtar hicbir zaman gosterilmez. */
+function jevMaskKey(k){
+  k=String(k||"");
+  if(!k)return "yok";
+  var kind="taninmayan bicim";
+  if(k.indexOf("sk-or-v1-")===0)kind="OpenRouter (sk-or-v1-)";
+  else if(k.indexOf("sk-or-")===0)kind="OpenRouter (sk-or-)";
+  else if(k.indexOf("ts-")===0)kind="TypeSafe (ts-)";
+  else if(k.indexOf("sk-")===0)kind="sk- oneki";
+  return kind+" · "+k.length+" karakter";
+}
+
 /* Ayar ekranindaki "Test" dugmesi: gercek Jev cagrisi yapip
-   gidis-donus suresini ve tipli yanitlari raporlar. */
+   ADIM ADIM teshis dondurur. Ag YOKSA bile yapisal sonuc doner. */
 async function jevTestRemote(lang){
   var tr=(lang==="tr");
-  if(!JEV_CONFIG.apiKey)return {ok:false,latencyMs:0,message:(tr?"Once bir Jev anahtari gir.":"Enter a Jev key first.")};
+  var steps=[];
+  function step(label,ok,info){steps.push({label:label,ok:!!ok,info:info===undefined?"":String(info)})}
+
+  /* 1) Yerel durum */
+  var keyOk=!!JEV_CONFIG.apiKey;
+  step(tr?"Jev anahtari okundu":"Jev key loaded",keyOk,jevMaskKey(JEV_CONFIG.apiKey));
+
+  var out={
+    ok:false,provider:jevProvider(),endpoint:jevEndpoint(),transport:JEV_CONFIG.transport,
+    keyOk:keyOk,keyMask:jevMaskKey(JEV_CONFIG.apiKey),
+    latencyMs:0,httpStatus:0,hint:"",code:"",message:"",model:null,detail:"",
+    answers:[],steps:steps
+  };
+  if(!keyOk){
+    step(tr?"Istek gonderildi":"Request sent",false,tr?"atlandi":"skipped");
+    out.hint="nokey";
+    out.message=tr?"Once Ayarlar -> Jev bolumunden bir API anahtari kaydet.":"Save an API key in Settings -> Jev first.";
+    step(out.message,false,"");
+    return out;
+  }
+
+  /* 2) Gercek cagri: uc tipin UCUNU de sinar (noul + choice + score) */
   var t0=jevNow();
   var res=await jevAskRemote(
-    {domain:"health_check",app:"Para Kontrol",purpose:"connectivity check"},
+    {domain:"health_check",app:"Para Kontrol",purpose:"connectivity check",check:"noul+choice+score"},
     {
       alive:{type:"noul",instructions:(tr?"Bu bir sistem saglik kontrolu; yanit verilebilir":"This is a system health check; a response is possible")},
-      domain:{type:"choice",instructions:(tr?"Metin hangi alana ait?":"Which domain is this text about?"),criteria:{finance:(tr?"Finans/para":"Finance/money"),other:(tr?"Diger":"Other")}}
+      domain:{type:"choice",instructions:(tr?"Metin hangi alana ait?":"Which domain is this text about?"),criteria:{finance:(tr?"Finans/para":"Finance/money"),other:(tr?"Diger":"Other")}},
+      quality:{type:"score",instructions:(tr?"Bu health-check istegi ne kadar net?":"How clear is this health-check request?"),criteria:[(tr?"belirsiz":"unclear"),(tr?"kismen net":"somewhat clear"),(tr?"cok net":"very clear")]}
     },
     lang
   );
   var ms=jevMs(t0);
+  out.latencyMs=ms;
+  out.hint=(res&&res.hint)||"";
+  out.httpStatus=(res&&res.httpStatus)||0;
+  out.detail=(res&&res.detail)||"";
+  out.code=(res&&res.error&&res.error.code)||"";
+  out.model=res&&res.model?res.model:null;
+
+  step(tr?("Istek gonderildi ("+JEV_CONFIG.transport+")"):("Request sent ("+JEV_CONFIG.transport+")"),true,JEV_CONFIG.transport==="gas"?tr?"Apps Script proxy":"Apps Script proxy":jevEndpoint());
+
   if(!res.ok){
-    return {ok:false,latencyMs:ms,provider:jevProvider(),model:jevModelId(),code:(res.error&&res.error.code)||"error",
-            message:(res.error&&res.error.message)||(tr?"Bilinmeyen hata":"Unknown error")};
+    out.message=(res.error&&res.error.message)||(tr?"Bilinmeyen hata":"Unknown error");
+    step(tr?"Sunucu yaniti":"Server response",false,(out.httpStatus?("HTTP "+out.httpStatus+" · "):"")+out.code);
+    step(out.message,false,out.detail?out.detail.slice(0,160):"");
+    return out;
   }
-  return {ok:true,latencyMs:ms,provider:jevProvider(),model:res.model,transport:JEV_CONFIG.transport,
-          answers:Object.keys(res.answers),
-          alive:(res.answers.alive?res.answers.alive.noul:null),
-          domain:(res.answers.domain?res.answers.domain.choice:null),
-          message:(tr?("Jev yanit verdi ("+ms+" ms)."):("Jev responded ("+ms+" ms)."))};
+
+  step(tr?"JSON guvenle ayristirildi":"JSON parsed safely",true,tr?"tipli":"typed");
+  var keys=Object.keys(res.answers||{});
+  step(tr?"Tipli cevaplar dogrulandi":"Typed answers validated",keys.length===3,keys.join(", "));
+
+  /* 3) Her ilkelin gercekten deger dondurdugunu goster */
+  var a=res.answers||{};
+  if(a.alive)out.answers.push({q:"noul",v:Number(a.alive.noul).toFixed(2),c:(a.alive.confidence==null?null:a.alive.confidence)});
+  if(a.domain)out.answers.push({q:"choice",v:String(a.domain.choice),c:a.domain.confidence});
+  if(a.quality)out.answers.push({q:"score",v:String(a.quality.score)+" / "+Math.max(0,Object.keys(a.quality.legend||{}).length-1),c:a.quality.confidence});
+
+  out.ok=true;
+  out.message=tr?("Jev CALISIYOR — "+ms+" ms"):("Jev WORKING — "+ms+" ms");
+  step(out.message,true,out.model||"");
+  return out;
 }
 
 
@@ -3228,6 +3314,7 @@ function App(){
   var _jevFillMsg=h(""),jevFillMsg=_jevFillMsg[0],setJevFillMsg=_jevFillMsg[1];
   var _jevNotice=h(""),jevNotice=_jevNotice[0],setJevNotice=_jevNotice[1];
   var _jevTesting=h(false),jevTesting=_jevTesting[0],setJevTesting=_jevTesting[1];
+  var _jevLastTest=h(null),jevLastTest=_jevLastTest[0],setJevLastTest=_jevLastTest[1];
   var _jevOpen=h(false),jevOpen=_jevOpen[0],setJevOpen=_jevOpen[1];
   var jevScanTsRef=ur(0);
   var jevSuggestTimerRef=ur(null);
@@ -4086,7 +4173,8 @@ function App(){
     setJevNotice(lang==="tr"?"Test ediliyor…":"Testing…");
     try{
       var r=await jevTestRemote(lang);
-      setJevNotice(r.message+(r.ok?((lang==="tr"?" • model: ":" • model: ")+String(r.model||"-")+(lang==="tr"?" • yanitlar: ":" • answers: ")+String((r.answers||[]).join(","))):""));
+      setJevLastTest(r);
+      setJevNotice(r.message);
     }catch(e){
       setJevNotice(String((e&&e.message)||e));
     }finally{
@@ -4300,8 +4388,13 @@ function App(){
       </div>
       <div style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",background:"rgba(99,102,241,0.07)",border:"1px solid rgba(99,102,241,0.2)",fontSize:10,color:"var(--txt)",lineHeight:1.5}}>
         <div><strong>${lang==="tr"?"Aktif motor:":"Active engine:"}</strong> ${jevEngineLabel(lang)}</div>
-        <div style=${{color:"var(--sub)",marginTop:2,fontFamily:"var(--mono)",fontSize:9,wordBreak:"break-all"}}>${jevEndpoint()}</div>
-        <div style=${{color:"var(--sub)",marginTop:2}}>${lang==="tr"?"Anahtar yoksa ag cagrisi yapilmaz; kararlar cihazindaki yerel cekirdekten aninda gelir.":"Without a key nothing goes over the network; decisions come instantly from the on-device local core."}</div>
+        <div style=${{marginTop:3,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style=${{fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:999,background:(jevKeySaved&&jevEngineMode!=="local")?"rgba(6,255,165,0.14)":"rgba(245,158,11,0.14)",color:(jevKeySaved&&jevEngineMode!=="local")?"var(--green)":"var(--amber)"}}>${(jevKeySaved&&jevEngineMode!=="local")?(lang==="tr"?"uzaktan karar AÇIK":"remote decision ON"):(lang==="tr"?"yerel çekirdek":"local core")}</span>
+          <span style=${{fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:999,background:"rgba(255,255,255,0.06)",color:"var(--sub)"}}>${lang==="tr"?"anahtar: ":"key: "}${jevKeySaved?jevMaskKey(JEV_CONFIG.apiKey):(lang==="tr"?"yok":"none")}</span>
+          <span style=${{fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:999,background:"rgba(255,255,255,0.06)",color:"var(--sub)"}}>${lang==="tr"?"taşıma: ":"transport: "}${jevTransport}</span>
+        </div>
+        <div style=${{color:"var(--sub)",marginTop:4,fontFamily:"var(--mono)",fontSize:9,wordBreak:"break-all"}}>${jevEndpoint()}</div>
+        <div style=${{color:"var(--sub)",marginTop:3}}>${lang==="tr"?"Doğrulamanın en hızlı yolu: aşağıdaki 📡 Test. Kararın hangi motordan geldiğini harcama ekranındaki uyarı rozetinde görürsün: 'jev %xx' = Jev API, 'yerel kural' = cihaz içi çekirdek.":"Fastest check: 📡 Test below. To see which engine answered, look at the tag on the warning in the spending screen: 'jev %xx' = Jev API, 'local rule' = on-device core."}</div>
       </div>
       <input class="inp-field" type="password" placeholder=${lang==="tr"?("Jev API anahtari ("+jevProviderConf().keyHint+")"):("Jev API key ("+jevProviderConf().keyHint+")")} value=${jevKeyDraft} onInput=${function(e){setJevKeyDraft(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
       <div style=${{fontSize:9,color:"var(--amber)",lineHeight:1.5}}>⚠ ${lang==="tr"?"Anahtar yalnizca bu cihazda saklanir (koda gomulmez) ama tarayicidan cikan bir anahtar sizabilir. OpenRouter panelinden bu anahtara HARCAMA LIMITI koyman onerilir. Bedava/limitsiz kullanmak icin tasimayi 'Apps Script proxy' yapabilirsin.":"The key is stored only on this device (never in the code), but a key used from the browser can leak. Set a SPEND LIMIT on this key in the OpenRouter dashboard. To keep it off the client, switch transport to 'Apps Script proxy'."}</div>
@@ -4336,8 +4429,26 @@ function App(){
         </div>
         ${jevTransport==="gas"&&html`<div style=${{fontSize:9,color:"var(--amber)",marginTop:5,lineHeight:1.5}}>${lang==="tr"?"Proxy, Drive Senkron ayarlarindaki URL ve token'i kullanir (token govdede, URL'de degil). Code.gs icindeki 'jev' action'i gerekir.":"The proxy uses the Drive Sync URL and token (token in body, never in URL). The 'jev' action in Code.gs is required."}</div>`}
       </div>
-      ${jevNotice&&html`<div style=${{padding:"9px 11px",borderRadius:"var(--radius-xs)",background:"rgba(99,102,241,0.06)",border:"1px solid rgba(99,102,241,0.22)",fontSize:10,color:"var(--txt)",lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>${jevNotice}</div>`}
-      ${last&&html`<div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Son cagri: ":"Last call: "}${String(last.code||"ok")} · ${String(last.latencyMs||0)} ms${last.ok?"":(lang==="tr"?" (basarisiz)":" (failed)")}</div>`}
+      ${jevNotice&&html`<div style=${{padding:"9px 11px",borderRadius:"var(--radius-xs)",background:jevLastTest&&jevLastTest.ok?"rgba(6,255,165,0.08)":"rgba(99,102,241,0.06)",border:"1px solid "+(jevLastTest&&jevLastTest.ok?"rgba(6,255,165,0.3)":"rgba(99,102,241,0.22)"),fontSize:11,fontWeight:700,color:jevLastTest&&jevLastTest.ok?"var(--green)":"var(--txt)",lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>${jevNotice}</div>`}
+      ${jevLastTest&&html`<div style=${{padding:"10px 12px",borderRadius:"var(--radius-xs)",background:"var(--card2)",border:"1px solid "+(jevLastTest.ok?"rgba(6,255,165,0.25)":"rgba(255,68,102,0.25)"),display:"flex",flexDirection:"column",gap:5}}>
+        <div style=${{fontSize:11,fontWeight:800,color:jevLastTest.ok?"var(--green)":"var(--red)"}}>${jevLastTest.ok?"✓ ":"✗ "}${lang==="tr"?"TEŞHİS":"DIAGNOSTICS"}</div>
+        ${(jevLastTest.steps||[]).map(function(s,i){
+          return html`<div key=${"jst"+i} style=${{display:"flex",gap:7,alignItems:"flex-start",fontSize:10,lineHeight:1.5}}>
+            <span style=${{color:s.ok?"var(--green)":"var(--red)",fontWeight:800,flexShrink:0}}>${s.ok?"✓":"✗"}</span>
+            <span style=${{flex:1,color:"var(--txt)"}}>${s.label}${s.info?html`<span style=${{color:"var(--dim)"}}> — ${s.info}</span>`:null}</span>
+          </div>`;
+        })}
+        ${(jevLastTest.answers||[]).length>0&&html`<div style=${{borderTop:"1px solid var(--border)",paddingTop:6,marginTop:2,fontSize:10,fontFamily:"var(--mono)",color:"var(--sub)",lineHeight:1.7}}>
+          ${jevLastTest.answers.map(function(a,i){return html`<div key=${"jva"+i}>${a.q}: <span style=${{color:"var(--txt)",fontWeight:700}}>${a.v}</span>${a.c!=null?html`<span style=${{color:"var(--dim)"}}> · güven ${Math.round(a.c*100)}%</span>`:null}</div>`})}
+        </div>`}
+        ${jevLastTest.detail&&html`<div style=${{fontSize:9,fontFamily:"var(--mono)",color:"var(--red)",wordBreak:"break-word",borderTop:"1px solid var(--border)",paddingTop:6}}>${String(jevLastTest.detail).slice(0,240)}</div>`}
+        ${(jevLastTest.hint==="cors_or_blocked")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Tarayıcı isteği engelledi (CORS). Aşağıdaki Tasima bölümünden 'Apps Script proxy' seç ve 📡 Test'i tekrar çalıştır.":"The browser blocked the request (CORS). Pick 'Apps Script proxy' under Transport below and run 📡 Test again."}</div>`}
+        ${(jevLastTest.hint==="key")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Anahtar reddedildi. openrouter.ai/keys adresinden yeni bir anahtar oluşturup tekrar dene.":"Key rejected. Create a fresh key at openrouter.ai/keys and retry."}</div>`}
+        ${(jevLastTest.hint==="credits")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Kredi/limit yetersiz. OpenRouter panelinden anahtara limit veya hesaba kredi ekle.":"Insufficient credits/limit. Add a key limit or account credits in the OpenRouter dashboard."}</div>`}
+        ${(jevLastTest.hint==="offline")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Çevrimdışısın. Bağlantı gelince tekrar dene.":"You are offline. Retry once you are back online."}</div>`}
+        ${(jevLastTest.hint==="proxy")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Proxy kurulu değil. Önce Drive Senkron URL+token gir ve gas/Code.gs'in yeni sürümünü yayınla (rev 4).":"Proxy not set up. Fill Drive Sync URL+token and deploy the new gas/Code.gs (rev 4)."}</div>`}
+      </div>`}
+      ${last&&html`<div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Son çağrı: ":"Last call: "}${String(last.code||"ok")}${last.httpStatus?(" · HTTP "+last.httpStatus):""}${last.hint?(" · "+last.hint):""} · ${String(last.latencyMs||0)} ms${last.ok?"":(lang==="tr"?" (başarısız)":" (failed)")}${last.ts?(" · "+new Date(last.ts).toLocaleTimeString(lang==="tr"?"tr-TR":"en-US",{hour:"2-digit",minute:"2-digit"})):""}</div>`}
       <button onClick=${function(){setJevOpen(!jevOpen)}} style=${{padding:"6px 10px",borderRadius:999,border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",alignSelf:"flex-start"}}>${jevOpen?(lang==="tr"?"Kendi kendini testi gizle":"Hide self-test"):(lang==="tr"?"🧪 Yerel cekirdek testi":"🧪 Local core self-test")}</button>
       ${jevOpen&&html`<div style=${{padding:"10px 12px",borderRadius:"var(--radius-xs)",background:"var(--card2)",border:"1px solid var(--border)",fontSize:9,lineHeight:1.7,fontFamily:"var(--mono)",whiteSpace:"pre-wrap",maxHeight:220,overflow:"auto"}}>${(function(){
         var res=jevSelfTest(lang);
