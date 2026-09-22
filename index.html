@@ -460,20 +460,25 @@ var JEV_KEY_MODE_KEY="pk_jev_key_mode";   /* "device" | "session" */
 var JEV_MODE_KEY="pk_jev_mode";           /* "auto" | "typesafe" | "local" */
 var JEV_TRANSPORT_KEY="pk_jev_transport"; /* "direct" | "gas" */
 var JEV_PROVIDER_KEY="pk_jev_provider";   /* "openrouter" | "typesafe" */
+var JEV_MODEL_KEY="pk_jev_model";         /* kullanicinin sectigi model (opsiyonel) */
+var JEV_MODEL_OK_KEY="pk_jev_model_ok";   /* en son BASARILI olan model (hizli yol) */
 var JEV_CACHE_KEY="pk_jev_cache";         /* son cagri teshis bilgisi */
 
 /* Saglayicilar: ikisi de AYNI "System One" sozlesmesini kullanir
    (state + questions -> tipli answers). OpenRouter, TypeSafe SDK'lariyla
-   uyumlu bir /systemone ucu sunar; bu yuzden ayni tipli katman isler. */
+   uyumlu bir /systemone ucu sunar; bu yuzden ayni tipli katman isler.
+   NOT: model slug'lari degisebilir; bu yuzden "modelFallbacks" sirali
+   yedek listesi var ve model yoksa (400) otomatik sonrakine gecilir. */
 var JEV_PROVIDERS={
   openrouter:{
     id:"openrouter",
     label:"OpenRouter",
     endpoint:"https://openrouter.ai/api/v1/systemone",
-    model:"typesafe/jev-latest",
-    jsonModel:"typesafe/jev-1.13",
+    model:"typesafe/jev-1.13",
+    modelFallbacks:["jev-1.13","typesafe/jev-latest","jev-latest"],
     keyHint:"sk-or-v1-...",
     consoleURL:"https://openrouter.ai/keys",
+    modelURL:"https://openrouter.ai/models?q=jev",
     referer:"https://sbakbulut.github.io/Para-takip/",
     title:"Para Kontrol"
   },
@@ -481,10 +486,11 @@ var JEV_PROVIDERS={
     id:"typesafe",
     label:"TypeSafe (dogrudan)",
     endpoint:"https://api.typesafe.ai/v1/systemone",
-    model:"jev-latest",
-    jsonModel:"jev-1.13",
+    model:"jev-1.13",
+    modelFallbacks:["jev-latest"],
     keyHint:"ts-...",
     consoleURL:"https://console.typesafe.ai/keys",
+    modelURL:"https://docs.typesafe.ai",
     referer:"",
     title:""
   }
@@ -495,10 +501,32 @@ function jevProvider(){
 }
 function jevProviderConf(){return JEV_PROVIDERS[jevProvider()]}
 function jevEndpoint(){return jevProviderConf().endpoint}
-function jevModelId(){return jevProviderConf().model}
+function jevModelId(){return JEV_CONFIG.modelOverride||jevProviderConf().model}
 function jevModelLabel(){
   var c=jevProviderConf();
-  return c.label+" · "+c.model;
+  return c.label+" · "+jevModelId();
+}
+/* Denenecek modeller: once kullanicinin sectigi, sonra hatirlanan basarili
+   model, sonra saglayicinin varsayilani + yedekleri. */
+function jevModelCandidates(){
+  var over=String(JEV_CONFIG.modelOverride||"").trim();
+  if(over)return [over];
+  var list=[];
+  try{var ok=localStorage.getItem(JEV_MODEL_OK_KEY)||"";if(ok)list.push(ok)}catch(e){}
+  var c=jevProviderConf();
+  list.push(c.model);
+  (c.modelFallbacks||[]).forEach(function(m){list.push(m)});
+  var seen={},out=[];
+  list.forEach(function(m){
+    m=String(m||"").trim();
+    if(m&&!seen[m]){seen[m]=1;out.push(m)}
+  });
+  return out;
+}
+/* "Model yok" hatasi mi? (OpenRouter 400: "Model X does not exist") */
+function jevIsModelMissing(status,detail,txt){
+  if(status!==400&&status!==404)return false;
+  return /does not exist|not a valid model|no endpoints|unknown model|model not found/i.test(String(detail||"")+" "+String(txt||""));
 }
 
 var JEV_CONFIG={
@@ -510,6 +538,7 @@ var JEV_CONFIG={
   keyMode:"device",
   engine:"auto",              /* "auto" | "typesafe" | "local" */
   transport:"direct",         /* "direct" | "gas" (Code.gs proxy) */
+  modelOverride:"",           /* kullanicinin yazdigi model slug (bos = varsayilan) */
   timeoutMs:6000,             /* Jev hizli: bekleme yerine yerel karara dus */
   reviewThreshold:0.55,       /* altinda -> requiresManualReview */
   minRemoteConfidence:0.5,    /* uzak karar yerel karari ancak bu kadar eminse ezer */
@@ -546,6 +575,7 @@ function jevKeyStore(key,mode){
     var pv=localStorage.getItem(JEV_PROVIDER_KEY);
     if(pv&&JEV_PROVIDERS[pv])JEV_CONFIG.provider=pv;
   }catch(e){}
+  try{JEV_CONFIG.modelOverride=localStorage.getItem(JEV_MODEL_KEY)||""}catch(e){}
   JEV_CONFIG.endpoint=jevEndpoint();
   JEV_CONFIG.model=jevModelId();
 })();
@@ -566,6 +596,18 @@ function jevSetProvider(id){
   JEV_CONFIG.endpoint=jevEndpoint();
   JEV_CONFIG.model=jevModelId();
   try{localStorage.setItem(JEV_PROVIDER_KEY,id)}catch(e){}
+}
+/* Model slug'ini elle gecersiz kil (bos = saglayici varsayilani) */
+function jevSetModelOverride(slug){
+  var s=String(slug||"").trim();
+  var changed=(s!==String(JEV_CONFIG.modelOverride||""));
+  JEV_CONFIG.modelOverride=s;
+  JEV_CONFIG.model=jevModelId();
+  try{
+    if(s)localStorage.setItem(JEV_MODEL_KEY,s);
+    else localStorage.removeItem(JEV_MODEL_KEY);
+    if(changed)localStorage.removeItem(JEV_MODEL_OK_KEY);   /* slug degisti -> hatirlanan modeli sifirla */
+  }catch(e){}
 }
 function jevCacheWrite(info){
   try{
@@ -763,27 +805,63 @@ async function jevHttp(bodyRaw){
   }
 }
 
-/* Jev'e sor (uzak motor). Asla throw etmez: her hata tipli jevFail sonucudur,
-   boylece cagiran kod try/catch yazmak zorunda kalmaz. */
+/* Jev'e sor (uzak motor). Asla throw etmez: her hata tipli jevFail sonucudur.
+   MODEL YEDEK ZINCIRI: slug'lar degisebildigi icin "model yok" (400) hatasinda
+   siradaki adaya otomatik gecilir; basarili olan model hatirlanir. */
 async function jevAskRemote(state,questions,lang){
   var t0=jevNow();
   var tr=(lang==="tr");
+  var cands=jevModelCandidates();
+  var tried=[];
+  var lastFail=null;
+
+  for(var ci=0;ci<cands.length;ci++){
+    var model=cands[ci];
+    tried.push(model);
+    var r=await jevAskRemoteOnce(model,state,questions,lang,t0);
+    if(r.ok){
+      if(ci>0){
+        /* Ilk aday olu; dogru slug'i hatirla ki her seferinde 400 yemeyelim */
+        try{localStorage.setItem(JEV_MODEL_OK_KEY,model)}catch(e){}
+      }
+      r.modelTried=tried.slice();
+      return r;
+    }
+    lastFail=r;
+    if(r.hint==="model_not_found"&&ci<cands.length-1)continue;   /* sonrakini dene */
+    break;
+  }
+  if(lastFail){
+    lastFail.modelTried=tried.slice();
+    if(tried.length>1&&lastFail.hint!=="model_not_found"){
+      /* yalnizca ilk aday denendi mi bilgisini ekle */
+      lastFail.modelTried=tried.slice();
+    }
+    return lastFail;
+  }
+  return jevFail("typesafe","no_candidate",tr?"Denenecek model bulunamadi.":"No model candidate to try.",{latencyMs:jevMs(t0)});
+}
+
+/* Tek deneme: bir model slug'i ile cagri + ayristirma + dogrulama. */
+async function jevAskRemoteOnce(model,state,questions,lang,t0){
+  var tr=(lang==="tr");
   try{
-    var text=await jevHttp({model:jevModelId(),state:state,questions:questions});
+    var text=await jevHttp({model:model,state:state,questions:questions});
     var ms=jevMs(t0);
     var raw=jevParseLoose(text);
     if(!raw){
-      jevCacheWrite({ok:false,engine:"typesafe",code:"bad_json",latencyMs:ms,ts:Date.now()});
-      return jevFail("typesafe","bad_json",tr?"Jev yaniti okunamadi (gecersiz JSON); yerel karar kullanildi.":"Could not read Jev response (invalid JSON); local decision used.",{latencyMs:ms});
+      jevCacheWrite({ok:false,engine:"typesafe",code:"bad_json",model:model,latencyMs:ms,ts:Date.now()});
+      return jevFail("typesafe","bad_json",tr?"Jev yaniti okunamadi (gecersiz JSON); yerel karar kullanildi.":"Could not read Jev response (invalid JSON); local decision used.",{latencyMs:ms,hint:"json",modelUsed:model});
     }
     if(raw.error){
       var em=(raw.error&&raw.error.message)?String(raw.error.message):JSON.stringify(raw.error);
-      jevCacheWrite({ok:false,engine:"typesafe",code:"api_error",latencyMs:ms,ts:Date.now()});
-      return jevFail("typesafe","api_error",em.slice(0,200),{latencyMs:ms});
+      var miss=jevIsModelMissing(400,"",em);
+      jevCacheWrite({ok:false,engine:"typesafe",code:"api_error",model:model,hint:miss?"model_not_found":"api",latencyMs:ms,ts:Date.now()});
+      return jevFail("typesafe","api_error",em.slice(0,200),{latencyMs:ms,hint:miss?"model_not_found":"api",modelUsed:model});
     }
     var norm=jevNormalizeAnswers(raw,questions);
-    var res=jevResult("typesafe",norm.answers,norm.invalid,{latencyMs:ms,model:raw.model||null,usage:raw.usage||null});
-    jevCacheWrite({ok:res.ok,engine:"typesafe",model:res.model,latencyMs:ms,invalid:norm.invalid.length,ts:Date.now()});
+    var res=jevResult("typesafe",norm.answers,norm.invalid,{latencyMs:ms,model:raw.model||null,usage:raw.usage||null,modelUsed:model,hint:"",modelTried:[model]});
+    jevCacheWrite({ok:res.ok,engine:"typesafe",model:res.model||model,hint:"",latencyMs:ms,invalid:norm.invalid.length,ts:Date.now()});
     return res;
   }catch(e){
     var ms2=jevMs(t0);
@@ -801,11 +879,13 @@ async function jevAskRemote(state,questions,lang){
     else if(code==="gas_proxy_not_configured"||code==="gas_error")hint="proxy";
     else if(code==="bad_json")hint="json";
     else if(code==="api_error")hint="api";
+    else if(code==="http_error"&&jevIsModelMissing(httpStatus,detail,msg))hint="model_not_found";
     else if(code==="http_error")hint=(httpStatus===402)?"credits":((httpStatus===429)?"rate":"http"+(httpStatus||""));
     else hint=online?"cors_or_blocked":"offline";
 
     var human;
-    if(code==="timeout")human=tr?"Jev zaman asimina ugradi; yerel karar kullanildi.":"Jev timed out; local decision used.";
+    if(hint==="model_not_found")human=tr?("Bu model slug'i OpenRouter'da yok: \""+model+"\". Ayarlar -> Jev -> Model alanindan gecerli bir slug gir."):("This model slug does not exist on OpenRouter: \""+model+"\". Enter a valid slug in Settings -> Jev -> Model.");
+    else if(code==="timeout")human=tr?"Jev zaman asimina ugradi; yerel karar kullanildi.":"Jev timed out; local decision used.";
     else if(code==="gas_proxy_not_configured")human=tr?"Proxy icin once Drive Senkron ayarlarini doldur.":"Fill in Drive Sync settings first to use the proxy.";
     else if(code==="unauthorized")human=tr?"Anahtar reddedildi (401/403). Anahtar dogru hesapla olusturulmus mu?":"Key rejected (401/403). Was the key created on the right account?";
     else if(code==="gas_error")human=tr?"Proxy hatasi: "+msg.slice(0,120):"Proxy error: "+msg.slice(0,120);
@@ -816,8 +896,8 @@ async function jevAskRemote(state,questions,lang){
     else if(hint==="cors_or_blocked")human=tr?"Istek tarayicidan engellendi (CORS olabilir). Ayarlar -> Jev -> Tasima: 'Apps Script proxy' sec ve tekrar dene.":"The request was blocked by the browser (likely CORS). Set Settings -> Jev -> Transport to 'Apps Script proxy' and retry.";
     else human=tr?"Cevrimdisi gorunuyorsun; yerel karar kullanildi.":"You appear to be offline; local decision used.";
 
-    jevCacheWrite({ok:false,engine:"typesafe",code:code,hint:hint,httpStatus:httpStatus,latencyMs:ms2,ts:Date.now()});
-    return jevFail("typesafe",code,human,{latencyMs:ms2,hint:hint,httpStatus:httpStatus,detail:detail});
+    jevCacheWrite({ok:false,engine:"typesafe",code:code,hint:hint,httpStatus:httpStatus,model:model,latencyMs:ms2,ts:Date.now()});
+    return jevFail("typesafe",code,human,{latencyMs:ms2,hint:hint,httpStatus:httpStatus,detail:detail,modelUsed:model});
   }
 }
 
@@ -1997,20 +2077,33 @@ function jevSelfTest(lang){
 
   /* 9) Saglayici (OpenRouter / TypeSafe) cozumleme */
   t("saglayici: openrouter endpoint",JEV_PROVIDERS.openrouter.endpoint==="https://openrouter.ai/api/v1/systemone");
-  t("saglayici: openrouter model slug",JEV_PROVIDERS.openrouter.model==="typesafe/jev-latest");
+  t("saglayici: openrouter gecerli model slug",JEV_PROVIDERS.openrouter.model==="typesafe/jev-1.13",JEV_PROVIDERS.openrouter.model);
+  t("saglayici: openrouter yedek model listesi var",(JEV_PROVIDERS.openrouter.modelFallbacks||[]).length>0);
   t("saglayici: typesafe endpoint",JEV_PROVIDERS.typesafe.endpoint==="https://api.typesafe.ai/v1/systemone");
   var prevProv=JEV_CONFIG.provider;
+  jevSetModelOverride("");
   jevSetProvider("openrouter");
   t("saglayici: openrouter secilince endpoint",jevEndpoint()==="https://openrouter.ai/api/v1/systemone",jevEndpoint());
-  t("saglayici: openrouter secilince model",jevModelId()==="typesafe/jev-latest",jevModelId());
+  t("saglayici: openrouter secilince model",jevModelId()==="typesafe/jev-1.13",jevModelId());
+  t("saglayici: aday listesi ilk ogesi varsayilan",jevModelCandidates()[0]==="typesafe/jev-1.13",jevModelCandidates().join(" > "));
   jevSetProvider("typesafe");
   t("saglayici: typesafe secilince endpoint",jevEndpoint()==="https://api.typesafe.ai/v1/systemone",jevEndpoint());
-  t("saglayici: typesafe secilince model",jevModelId()==="jev-latest",jevModelId());
+  t("saglayici: typesafe secilince model",jevModelId()==="jev-1.13",jevModelId());
   t("saglayici: bilinmeyen id yok sayilir",(function(){jevSetProvider("yok");return jevProvider()==="typesafe"})());
   jevSetProvider(prevProv);
   t("saglayici: geri yuklendi",jevEndpoint()===JEV_PROVIDERS[jevProvider()].endpoint);
 
-  /* 10) Anahtar teshisi: TAM anahtar hicbir zaman gorunmez */
+  /* 10) Model override + "model yok" teshisi */
+  jevSetModelOverride("typesafe/ozel-model");
+  t("model: override gecerli",jevModelId()==="typesafe/ozel-model",jevModelId());
+  t("model: override tek aday",jevModelCandidates().length===1&&jevModelCandidates()[0]==="typesafe/ozel-model");
+  jevSetModelOverride("");
+  t("model: override temizlenince varsayilana doner",jevModelId()===JEV_PROVIDERS[jevProvider()].model);
+  t("model: 'does not exist' teshis edilir",jevIsModelMissing(400,"Model typesafe/jev-latest does not exist")===true);
+  t("model: 401 model yok sayilmaz",jevIsModelMissing(401,"Model typesafe/jev-latest does not exist")===false);
+  t("model: alakasiz 400 model yok degil",jevIsModelMissing(400,"invalid questions schema")===false);
+
+  /* 11) Anahtar teshisi: TAM anahtar hicbir zaman gorunmez */
   var fakeKey="sk-or-v1-abcdef1234567890abcdef1234567890";
   var masked=jevMaskKey(fakeKey);
   t("teshis: anahtar maskelendi (sizinti yok)",masked.indexOf("abcdef1234567890")===-1,masked);
@@ -2076,6 +2169,8 @@ async function jevTestRemote(lang){
   out.detail=(res&&res.detail)||"";
   out.code=(res&&res.error&&res.error.code)||"";
   out.model=res&&res.model?res.model:null;
+  out.modelUsed=(res&&res.modelUsed)||null;
+  out.modelTried=(res&&res.modelTried)||[];
 
   step(tr?("Istek gonderildi ("+JEV_CONFIG.transport+")"):("Request sent ("+JEV_CONFIG.transport+")"),true,JEV_CONFIG.transport==="gas"?tr?"Apps Script proxy":"Apps Script proxy":jevEndpoint());
 
@@ -2098,7 +2193,8 @@ async function jevTestRemote(lang){
 
   out.ok=true;
   out.message=tr?("Jev CALISIYOR — "+ms+" ms"):("Jev WORKING — "+ms+" ms");
-  step(out.message,true,out.model||"");
+  step(out.message,true,(out.modelUsed?out.modelUsed+" · ":"")+(out.model||""));
+  if(out.modelTried.length>1)step(tr?"Yedek zincir denendi":"Fallback chain tried",true,out.modelTried.join(" → "));
   return out;
 }
 
@@ -3315,6 +3411,7 @@ function App(){
   var _jevNotice=h(""),jevNotice=_jevNotice[0],setJevNotice=_jevNotice[1];
   var _jevTesting=h(false),jevTesting=_jevTesting[0],setJevTesting=_jevTesting[1];
   var _jevLastTest=h(null),jevLastTest=_jevLastTest[0],setJevLastTest=_jevLastTest[1];
+  var _jevModelDraft=h(JEV_CONFIG.modelOverride||""),jevModelDraft=_jevModelDraft[0],setJevModelDraft=_jevModelDraft[1];
   var _jevOpen=h(false),jevOpen=_jevOpen[0],setJevOpen=_jevOpen[1];
   var jevScanTsRef=ur(0);
   var jevSuggestTimerRef=ur(null);
@@ -4378,13 +4475,29 @@ function App(){
     return html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
       <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.55}}>${lang==="tr"?"Jev = System One karar modeli: hizli, TIPLI ciktilar (choice / noul / score) ve kalibre guven skoru uretir. Sohbet/analiz DeepSeek'te kalir; Jev anlik kararlar ve arka plan taramalari icindir.":"Jev = a System One decision model: fast, TYPED outputs (choice / noul / score) with calibrated confidence. Chat and analysis stay on DeepSeek; Jev handles instant decisions and background scans."}</div>
       <div>
-        <div style=${{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:5}}>${lang==="tr"?"Jev saglayicisi":"Jev provider"}</div>
+        <div style=${{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:5}}>${lang==="tr"?"Jev sağlayıcısı":"Jev provider"}</div>
         <div style=${{display:"flex",gap:5,flexWrap:"wrap"}}>
           ${Object.keys(JEV_PROVIDERS).map(function(pid){
             var p=JEV_PROVIDERS[pid],act=jevProvider()===pid;
-            return html`<button key=${pid} onClick=${function(){jevSetProvider(pid);setJevNotice(lang==="tr"?("Saglayici: "+p.label+" ("+p.model+")"):("Provider: "+p.label+" ("+p.model+")"))}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${p.label}</button>`;
+            return html`<button key=${pid} onClick=${function(){jevSetProvider(pid);setJevNotice(lang==="tr"?("Sağlayıcı: "+p.label+" ("+jevModelId()+")"):("Provider: "+p.label+" ("+jevModelId()+")"))}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${p.label}</button>`;
           })}
         </div>
+      </div>
+      <div>
+        <div style=${{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:5}}>${lang==="tr"?"Model (slug)":"Model (slug)"}</div>
+        <div style=${{display:"flex",gap:6,alignItems:"center"}}>
+          <input class="inp-field" type="text" placeholder=${jevProviderConf().model} value=${jevModelDraft} onInput=${function(e){setJevModelDraft(e.target.value)}} style=${{flex:1,fontSize:11,fontFamily:"var(--mono)"}}/>
+          <button onClick=${function(){
+            jevSetModelOverride(jevModelDraft.trim());
+            setJevNotice(jevModelDraft.trim()?(lang==="tr"?("Model: "+jevModelDraft.trim()):("Model: "+jevModelDraft.trim())):(lang==="tr"?"Model varsayılana döndü":"Model reverted to default"));
+          }} style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.35)",background:"rgba(99,102,241,0.08)",color:"var(--purple)",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>${lang==="tr"?"Uygula":"Apply"}</button>
+          ${JEV_CONFIG.modelOverride&&html`<button onClick=${function(){jevSetModelOverride("");setJevModelDraft("")}} style=${{padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>↺</button>`}
+        </div>
+        <div style=${{fontSize:9,color:"var(--dim)",marginTop:4,lineHeight:1.5}}>
+          ${lang==="tr"?"Aktif: ":"Active: "}<span style=${{fontFamily:"var(--mono)",color:"var(--txt)"}}>${jevModelId()}</span>
+          ${!JEV_CONFIG.modelOverride&&html`<span> · ${lang==="tr"?"yedek zinciri: ":"fallback chain: "}<span style=${{fontFamily:"var(--mono)"}}>${jevModelCandidates().slice(1).join(" → ")||"—"}</span></span>`}
+        </div>
+        <div style=${{fontSize:9,color:"var(--dim)",marginTop:2}}>${lang==="tr"?"Model adı değişirse buraya yaz (örn. typesafe/jev-1.14); yedek zinciri model yoksa otomatik sıradakini dener.":"If the model name changes, type it here (e.g. typesafe/jev-1.14); the fallback chain auto-tries the next one when a model is missing."}</div>
       </div>
       <div style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",background:"rgba(99,102,241,0.07)",border:"1px solid rgba(99,102,241,0.2)",fontSize:10,color:"var(--txt)",lineHeight:1.5}}>
         <div><strong>${lang==="tr"?"Aktif motor:":"Active engine:"}</strong> ${jevEngineLabel(lang)}</div>
@@ -4447,6 +4560,7 @@ function App(){
         ${(jevLastTest.hint==="credits")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Kredi/limit yetersiz. OpenRouter panelinden anahtara limit veya hesaba kredi ekle.":"Insufficient credits/limit. Add a key limit or account credits in the OpenRouter dashboard."}</div>`}
         ${(jevLastTest.hint==="offline")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Çevrimdışısın. Bağlantı gelince tekrar dene.":"You are offline. Retry once you are back online."}</div>`}
         ${(jevLastTest.hint==="proxy")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Proxy kurulu değil. Önce Drive Senkron URL+token gir ve gas/Code.gs'in yeni sürümünü yayınla (rev 4).":"Proxy not set up. Fill Drive Sync URL+token and deploy the new gas/Code.gs (rev 4)."}</div>`}
+        ${(jevLastTest.hint==="model_not_found")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?("Model slug'i yok. Yukarıdaki Model alanına geçerli bir slug yaz (örn. typesafe/jev-1.13) ve Uygula'ya bas; yedek zinciri de denendi: "+(jevLastTest.modelTried||[]).join(" → ")):("Model slug missing. Enter a valid slug in the Model field above (e.g. typesafe/jev-1.13) and press Apply; the fallback chain was also tried: "+(jevLastTest.modelTried||[]).join(" → "))}</div>`}
       </div>`}
       ${last&&html`<div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Son çağrı: ":"Last call: "}${String(last.code||"ok")}${last.httpStatus?(" · HTTP "+last.httpStatus):""}${last.hint?(" · "+last.hint):""} · ${String(last.latencyMs||0)} ms${last.ok?"":(lang==="tr"?" (başarısız)":" (failed)")}${last.ts?(" · "+new Date(last.ts).toLocaleTimeString(lang==="tr"?"tr-TR":"en-US",{hour:"2-digit",minute:"2-digit"})):""}</div>`}
       <button onClick=${function(){setJevOpen(!jevOpen)}} style=${{padding:"6px 10px",borderRadius:999,border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",alignSelf:"flex-start"}}>${jevOpen?(lang==="tr"?"Kendi kendini testi gizle":"Hide self-test"):(lang==="tr"?"🧪 Yerel cekirdek testi":"🧪 Local core self-test")}</button>

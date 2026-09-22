@@ -103,7 +103,7 @@ Kurallar:
 ## Jev (System One) proxy'si — isteğe bağlı
 
 Jev, **OpenRouter** anahtarınla da çağrılabilir: uygulama varsayılan olarak
-`POST https://openrouter.ai/api/v1/systemone` adresine gider (model `typesafe/jev-latest`).
+`POST https://openrouter.ai/api/v1/systemone` adresine gider (model `typesafe/jev-1.13`).
 Tarayıcıdan çıkan bir anahtar sızabileceği için OpenRouter panelinden anahtara **harcama
 limiti** koy ya da isteği bu Apps Script üzerinden geçir.
 
@@ -122,7 +122,7 @@ Güvenlik notları (proxy tarafı):
 
 - İstek gövdesi: `{action:"jev", token, jevKey, provider, request:{model,state,questions}}`.
 - **Hedef adres istemciden alınmaz**; sunucuda beyaz listedir (`openrouter` / `typesafe`) → SSRF kapalı.
-- `model` alanı da beyaz listedir (`typesafe/jev-latest`, `typesafe/jev-1.13`, `jev-latest`, `jev-1.13`).
+- `model` alanı desen denetiminden geçer (`^(typesafe/)?jev-<sürüm>$`) — sürüm değişse de proxy güncellemeye gerek kalmaz.
 - `jevKey` yalnızca istek içinde geçer; Script Properties'e **yazılmaz**, yanıtta **geri döndürülmez**, log'a basılmaz.
 - Gövde sınırı 200 KB; dakikada 60 istek; `401/403 → unauthorized`, `429 → rate_limited`, `402 → insufficient_credits`.
 

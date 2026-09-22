@@ -129,10 +129,9 @@ function jevProxy(body) {
   var endpoint = JEV_ENDPOINTS[provider];
   if (!endpoint) return json({ ok: false, error: "bad_provider" });
 
-  /* Model kimligi: yalnizca beklenen desen (beyaz liste) */
+  /* Model kimligi: yalnizca beklenen desen (beyaz liste, surum toleransli) */
   var model = String(req.model || "");
-  if (model !== "typesafe/jev-latest" && model !== "typesafe/jev-1.13" &&
-      model !== "jev-latest" && model !== "jev-1.13") {
+  if (!/^(typesafe\/)?jev-[a-z0-9.\-]+$/i.test(model)) {
     return json({ ok: false, error: "bad_model" });
   }
 

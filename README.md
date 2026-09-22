@@ -21,9 +21,16 @@ DeepSeek **akıl hocası** olarak kaldı: sohbet, aylık yorum, derin analiz, se
 ### Jev nereden çağrılıyor?
 
 **OpenRouter** hesabındaki API anahtarıyla: `POST https://openrouter.ai/api/v1/systemone`
-(model `typesafe/jev-latest`). TypeSafe SDK'larıyla **aynı System One sözleşmesi** kullanılır, yani
+(model **`typesafe/jev-1.13`**). TypeSafe SDK'larıyla **aynı System One sözleşmesi** kullanılır, yani
 gövde `{state, model, questions}` → yanıt `{model, answers, usage}`. TypeSafe'a doğrudan bağlanmak
 da mümkündür (Ayarlar → Jev → sağlayıcı seçimi).
+
+> **Model slug'ları değişebilir.** Bu yüzden istemci sabit bir ada bağlı değil:
+> sıralı bir **yedek zinciri** var (`typesafe/jev-1.13 → jev-1.13 → typesafe/jev-latest → jev-latest`).
+> Bir slug `400 Model … does not exist` dönerse otomatik olarak sıradakine geçilir ve **çalışan slug
+> hatırlanır**. Ayarlar → Jev → **Model (slug)** alanından elle de yazabilirsin; "Uygula" dediğinde
+> yalnızca o slug denenir. Yani TypeSafe yeni sürüm yayınlarsa kod güncellemeden `typesafe/jev-1.14`
+> yazıp devam edebilirsin.
 
 ### Neden iki motor var?
 
@@ -132,6 +139,7 @@ Ayarlar'daki **Son çağrı** satırı son denemenin kodunu, HTTP durumunu, ipuc
 | `network` + `cors_or_blocked` | Tarayıcı isteği engelledi (CORS) | Taşıma → **Apps Script proxy** (+ `Code.gs` rev 4 yayınla) |
 | `network` + `offline` | Gerçekten çevrimdışısın | Bağlantı gelince tekrar dene |
 | `unauthorized` + `key` | Anahtar reddedildi (401/403) | openrouter.ai/keys'ten yeni anahtar |
+| `http_error` + `model_not_found` | Model slug'ı yok (400) | Model alanına geçerli slug yaz (`typesafe/jev-1.13`) — yedek zinciri zaten otomatik denedi |
 | `http_error` + `credits` | Kredi/limit yetersiz (402) | Panelden kredi veya anahtar limiti |
 | `http_error` + `rate` | Çok fazla istek (429) | Biraz bekleyip tekrar dene |
 | `gas_error` / `gas_proxy_not_configured` | Proxy kurulu değil | Drive Senkron URL+token gir, rev 4'ü yayınla |
@@ -283,7 +291,7 @@ python3 -m http.server 8080      # http://localhost:8080
 
 - `test.js` — render, sekme geçişleri, gizli bölümler, `parseNum`/`fmt`, PIN (SHA-256 + 5 deneme kilidi), DeepSeek istek gövdesi (thinking on/off, 401 mesajı, `reasoning_content`), `sanitizeRemote` (CSS injection / tip / limit), `remoteSuspicious`, güvenli Drive protokolü.
 - `test-sync.js` — Drive senaryoları: boş uzak veri → çakışma onayı (yerel veri korunur), geçerli uzak veri → uygulama + anlık görüntü, "Yereli gönder" ile uzak veriyi ezme, `📡 Test` çıktısı, eski zayıf script için GÜVENLİK uyarısı.
-- `test-jev.js` — Jev hibrit katmanı (101 kontrol): OpenRouter endpoint/model/başlıkları, tipli cevap doğrulama (küme dışı seçim · aralık dışı olasılık reddi), `jevParseLoose` dayanıklılığı, güven formülü, risk kapısı (`isAllowed`/`riskLevel`/`deficitAmount`, "izin genişletilemez" kuralı), kategorizasyon (marka→kategori, TR tutar biçimleri, "harcama değil" reddi, kişisel geçmiş öğrenmesi), olasılık testleri (Poisson/Wilson/Welch/modified-z), ağ hatası & bozuk JSON'da throw etmeme, `sanitizeRemote` beyaz listesi, ayarlar UI'si, arayüzde anlık uyarı, self-test paneli ve **📡 Test teşhis akışı** (adım adım sonuç, hata ipuçları, anahtarın maskelenmesi/sızmaması).
+- `test-jev.js` — Jev hibrit katmanı (116 kontrol): OpenRouter endpoint/model/başlıkları, **model yedek zinciri** (400 “does not exist” → otomatik geçiş + çalışan slug'ı hatırlama + tüm adaylar ölüyse açık hata), tipli cevap doğrulama (küme dışı seçim · aralık dışı olasılık reddi), `jevParseLoose` dayanıklılığı, güven formülü, risk kapısı (`isAllowed`/`riskLevel`/`deficitAmount`, "izin genişletilemez" kuralı), kategorizasyon (marka→kategori, TR tutar biçimleri, "harcama değil" reddi, kişisel geçmiş öğrenmesi), olasılık testleri (Poisson/Wilson/Welch/modified-z), ağ hatası & bozuk JSON'da throw etmeme, `sanitizeRemote` beyaz listesi, ayarlar UI'si, arayüzde anlık uyarı, self-test paneli ve **📡 Test teşhis akışı** (adım adım sonuç, hata ipuçları, anahtarın maskelenmesi/sızmaması).
 
 ```bash
 cd /tmp/smoke && node test.js && node test-sync.js && node test-jev.js   # jsdom + yerel React kopyaları gerekir
