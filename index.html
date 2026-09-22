@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v11.2</title>
+<title>Para Kontrol v12.0</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="11.2";
+var APP_VERSION="12.0";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -418,6 +418,1599 @@ async function callDeepSeekAI(messages,lang){
     if(timer)clearTimeout(timer);
   }
 }
+
+/* ============================================================
+   JEV — SYSTEM ONE (hizli, TIPLI karar katmani)
+   ============================================================
+   DeepSeek "System 2" olarak kalir: sohbet, aylik yorum, derin analiz.
+   Jev  "System 1" olarak eklenir: milisaniyelik kararlar, TIPLI cikti
+   (choice / noul / score + kalibre olasilik), arka plan taramalari.
+
+   API (TypeSafe): POST https://api.typesafe.ai/v1/systemone
+     Authorization: Bearer <key>
+     body: {model:"jev-latest", state:<nesne|metin>, questions:{...}}
+     yanit: {model, answers:{...}, usage}  -> metin URETMEZ, tip hatasi yapmaz
+
+   NEDEN IKI MOTOR?
+   - "typesafe": gercek Jev API'si. Tur 70-500 ms ve tarayicidan yapilan
+     capraz-koken istek CORS/tarayici tarafindan engellenebilir.
+   - "local": tarayicida calisan deterministik System One cekirdegi.
+     Ag yok -> ~0 ms. AYNI TIPLI SOZLESMEYI uretir; cagiran kod iki
+     motor arasindaki farki gormez.
+   Varsayilan "auto": once yerel karar ANINDA gosterilir, Jev API'si
+   yanit verirse karar yukseltilir. Arayuz asla beklemez.
+
+   ILKELER
+   1) Para matematigi (butce asimi, eksik tutar, projeksiyon) HER ZAMAN
+      kodda kalir. Model yalnizca yargi uretir; izni DARALTABILIR,
+      asla GENISLETEMEZ.
+   2) Hicbir fonksiyon throw etmez ve ham metin dondurmez; cikti her
+      zaman tipli ve dogrulanmis bir nesnedir.
+   3) Guven = en yuksek olasilik - 0.5 * ikinci olasilik. Bu, TypeSafe'in
+      yayinladigi degerlerle ortusur (0.85/0.15->0.78 ; 0.56/0.44->0.33 ;
+      1.0/0.0->1.0).
+   ============================================================ */
+var JEV_KEY="pk_jev_key";
+var JEV_KEY_MODE_KEY="pk_jev_key_mode";   /* "device" | "session" */
+var JEV_MODE_KEY="pk_jev_mode";           /* "auto" | "typesafe" | "local" */
+var JEV_TRANSPORT_KEY="pk_jev_transport"; /* "direct" | "gas" */
+var JEV_PROVIDER_KEY="pk_jev_provider";   /* "openrouter" | "typesafe" */
+var JEV_CACHE_KEY="pk_jev_cache";         /* son cagri teshis bilgisi */
+
+/* Saglayicilar: ikisi de AYNI "System One" sozlesmesini kullanir
+   (state + questions -> tipli answers). OpenRouter, TypeSafe SDK'lariyla
+   uyumlu bir /systemone ucu sunar; bu yuzden ayni tipli katman isler. */
+var JEV_PROVIDERS={
+  openrouter:{
+    id:"openrouter",
+    label:"OpenRouter",
+    endpoint:"https://openrouter.ai/api/v1/systemone",
+    model:"typesafe/jev-latest",
+    jsonModel:"typesafe/jev-1.13",
+    keyHint:"sk-or-v1-...",
+    consoleURL:"https://openrouter.ai/keys",
+    referer:"https://sbakbulut.github.io/Para-takip/",
+    title:"Para Kontrol"
+  },
+  typesafe:{
+    id:"typesafe",
+    label:"TypeSafe (dogrudan)",
+    endpoint:"https://api.typesafe.ai/v1/systemone",
+    model:"jev-latest",
+    jsonModel:"jev-1.13",
+    keyHint:"ts-...",
+    consoleURL:"https://console.typesafe.ai/keys",
+    referer:"",
+    title:""
+  }
+};
+function jevProvider(){
+  var p=JEV_CONFIG.provider;
+  return JEV_PROVIDERS[p]?p:"openrouter";
+}
+function jevProviderConf(){return JEV_PROVIDERS[jevProvider()]}
+function jevEndpoint(){return jevProviderConf().endpoint}
+function jevModelId(){return jevProviderConf().model}
+function jevModelLabel(){
+  var c=jevProviderConf();
+  return c.label+" · "+c.model;
+}
+
+var JEV_CONFIG={
+  provider:"openrouter",
+  endpoint:"https://openrouter.ai/api/v1/systemone",
+  model:"typesafe/jev-latest",
+  modelLabel:"Jev (TypeSafe System One)",
+  apiKey:"",
+  keyMode:"device",
+  engine:"auto",              /* "auto" | "typesafe" | "local" */
+  transport:"direct",         /* "direct" | "gas" (Code.gs proxy) */
+  timeoutMs:6000,             /* Jev hizli: bekleme yerine yerel karara dus */
+  reviewThreshold:0.55,       /* altinda -> requiresManualReview */
+  minRemoteConfidence:0.5,    /* uzak karar yerel karari ancak bu kadar eminse ezer */
+  maxAnomalies:12,
+  scanMinGapMs:15000          /* arka plan taramalari arasi en az sure */
+};
+
+/* --- Anahtar saklama: DeepSeek ile ayni guvenli desen (koda gomulmez) --- */
+function jevKeyLoad(){
+  var pref="device";
+  try{pref=localStorage.getItem(JEV_KEY_MODE_KEY)||"device"}catch(e){}
+  try{var dev=localStorage.getItem(JEV_KEY)||"";if(dev)return{key:dev,mode:"device"}}catch(e){}
+  try{var ses=sessionStorage.getItem(JEV_KEY)||"";if(ses)return{key:ses,mode:"session"}}catch(e){}
+  return{key:"",mode:pref==="session"?"session":"device"};
+}
+function jevKeyStore(key,mode){
+  var m=(mode==="session")?"session":"device";
+  try{localStorage.setItem(JEV_KEY_MODE_KEY,m)}catch(e){}
+  try{localStorage.removeItem(JEV_KEY)}catch(e){}
+  try{sessionStorage.removeItem(JEV_KEY)}catch(e){}
+  if(!key)return true;
+  try{
+    if(m==="session"){sessionStorage.setItem(JEV_KEY,key);return true}
+    localStorage.setItem(JEV_KEY,key);return true;
+  }catch(e){return false}
+}
+(function(){
+  var init=jevKeyLoad();
+  JEV_CONFIG.apiKey=init.key;
+  JEV_CONFIG.keyMode=init.mode;
+  try{var m=localStorage.getItem(JEV_MODE_KEY);if(m==="auto"||m==="typesafe"||m==="local")JEV_CONFIG.engine=m}catch(e){}
+  try{var tr=localStorage.getItem(JEV_TRANSPORT_KEY);if(tr==="gas"||tr==="direct")JEV_CONFIG.transport=tr}catch(e){}
+  try{
+    var pv=localStorage.getItem(JEV_PROVIDER_KEY);
+    if(pv&&JEV_PROVIDERS[pv])JEV_CONFIG.provider=pv;
+  }catch(e){}
+  JEV_CONFIG.endpoint=jevEndpoint();
+  JEV_CONFIG.model=jevModelId();
+})();
+
+/* Hangi motor kullanilacak? Anahtar yoksa ag hic denenmez. */
+function jevEngine(){
+  if(JEV_CONFIG.engine==="local")return "local";
+  if(!JEV_CONFIG.apiKey)return "local";
+  return "typesafe";
+}
+function jevEngineLabel(lang){
+  return (jevEngine()==="typesafe")?jevModelLabel():((lang==="tr")?"Yerel System One cekirdegi":"Local System One core");
+}
+/* Saglayici degistiginde endpoint/model turetilmis alanlari guncelle */
+function jevSetProvider(id){
+  if(!JEV_PROVIDERS[id])return;
+  JEV_CONFIG.provider=id;
+  JEV_CONFIG.endpoint=jevEndpoint();
+  JEV_CONFIG.model=jevModelId();
+  try{localStorage.setItem(JEV_PROVIDER_KEY,id)}catch(e){}
+}
+function jevCacheWrite(info){
+  try{
+    var prev=null;
+    try{prev=JSON.parse(localStorage.getItem(JEV_CACHE_KEY)||"null")}catch(e){}
+    localStorage.setItem(JEV_CACHE_KEY,JSON.stringify({
+      last:info,
+      lastOk:info&&info.ok?info:((prev&&prev.lastOk)?prev.lastOk:null)
+    }));
+  }catch(e){}
+}
+function jevCacheRead(){
+  try{return JSON.parse(localStorage.getItem(JEV_CACHE_KEY)||"null")}catch(e){return null}
+}
+
+/* --- Tip yardimcilari + TIPLI CEVAP DOGRULAMA -------------------
+   Ham API yaniti asla dogrudan kullanilmaz. Kumede olmayan secim,
+   aralik disi skor, NaN/negatif olasilik -> cevap gecersiz sayilir ve
+   "invalid" listesine duser. Bu fonksiyonlar asla throw etmez. */
+function jevClamp01(v){
+  if(v===null||typeof v==="undefined"||v==="")return null;
+  var n=(typeof v==="number")?v:parseFloat(v);
+  if(!isFinite(n))return null;
+  return Math.max(0,Math.min(1,n));
+}
+/* KATI olasilik dogrulamasi: aralik disi deger GECERSIZ sayilir.
+   (Kucuk kayan nokta hatasi toleransli: 1.0000001 kabul, 1.5 reddedilir.)
+   Bu, "tip hatasi yapmayan" sozlesmenin korunmasini saglar. */
+var JEV_PROB_EPS=1e-6;
+function jevProb01(v){
+  if(v===null||typeof v==="undefined"||v==="")return null;
+  var n=(typeof v==="number")?v:parseFloat(v);
+  if(!isFinite(n))return null;
+  if(n<-JEV_PROB_EPS||n>1+JEV_PROB_EPS)return null;
+  return Math.max(0,Math.min(1,n));
+}
+var JEV_QUESTION_TYPES={choice:1,score:1,noul:1};
+
+function jevNormalizeAnswers(raw,asked){
+  var out={},invalid=[];
+  var answers=(raw&&typeof raw==="object"&&raw.answers&&typeof raw.answers==="object")?raw.answers:{};
+  Object.keys(asked||{}).forEach(function(k){
+    var q=asked[k]||{},a=answers[k];
+    if(!a||typeof a!=="object"){invalid.push({q:k,reason:"missing"});return}
+    var type=String(a.type||q.type||"");
+    if(!JEV_QUESTION_TYPES[type]){invalid.push({q:k,reason:"unknown_type"});return}
+
+    if(type==="choice"){
+      var opts=Object.keys(q.criteria||{});
+      var pick=String(a.choice||"");
+      if(opts.length===0||opts.indexOf(pick)===-1){invalid.push({q:k,reason:"choice_out_of_set"});return}
+      var probs={},bad=false,sum=0;
+      opts.forEach(function(o){
+        var p=jevProb01((a.probabilities||{})[o]);
+        if(p===null){bad=true;return}
+        probs[o]=p;sum+=p;
+      });
+      if(bad){invalid.push({q:k,reason:"bad_probabilities"});return}
+      if(sum<=0){invalid.push({q:k,reason:"zero_probabilities"});return}
+      if(Math.abs(sum-1)>0.02)opts.forEach(function(o){probs[o]=probs[o]/sum});
+      var conf=jevClamp01(a.confidence);
+      out[k]={type:"choice",choice:pick,confidence:(conf===null?probs[pick]:conf),probabilities:probs,valid:true,abstain:false};
+      return;
+    }
+
+    if(type==="score"){
+      var levels=Array.isArray(q.criteria)?q.criteria:[];
+      if(levels.length===0){invalid.push({q:k,reason:"no_levels"});return}
+      var sc=(typeof a.score==="number")?a.score:parseFloat(a.score);
+      if(!isFinite(sc)||sc<0||sc>levels.length-1){invalid.push({q:k,reason:"score_out_of_range"});return}
+      var probs2={},legend={},sum2=0,bad2=false;
+      levels.forEach(function(lv,i){
+        var p=jevProb01((a.probabilities||{})[String(i)]);
+        if(p===null){bad2=true;return}
+        probs2[String(i)]=p;sum2+=p;legend[String(i)]=String(lv);
+      });
+      if(bad2){invalid.push({q:k,reason:"bad_probabilities"});return}
+      if(sum2>0&&Math.abs(sum2-1)>0.02)levels.forEach(function(_lv,i){probs2[String(i)]=probs2[String(i)]/sum2});
+      var conf2=jevClamp01(a.confidence);
+      out[k]={type:"score",score:Math.round(sc),confidence:(conf2===null?0:conf2),legend:legend,probabilities:probs2,valid:true,abstain:false};
+      return;
+    }
+
+    /* noul: "evet" olasiligi (confidence opsiyoneldir) */
+    var p2=jevProb01(a.noul);
+    if(p2===null){invalid.push({q:k,reason:"bad_noul"});return}
+    out[k]={type:"noul",noul:p2,confidence:jevClamp01(a.confidence),valid:true,abstain:false};
+  });
+  return {answers:out,invalid:invalid};
+}
+
+/* --- Sonuc zarfi: her cikis ayni sekilde, her zaman tipli --- */
+function jevResult(engine,answers,invalid,extra){
+  var r={
+    ok:(invalid||[]).length===0,
+    engine:engine,
+    answers:answers||{},
+    invalid:invalid||[],
+    error:null,
+    model:null,
+    usage:null,
+    latencyMs:0,
+    generatedAt:Date.now()
+  };
+  if(extra)Object.keys(extra).forEach(function(k){r[k]=extra[k]});
+  return r;
+}
+function jevFail(engine,code,message,extra){
+  var r=jevResult(engine,{},[{q:"*",reason:code}],extra);
+  r.ok=false;
+  r.error={code:code,message:String(message||"").slice(0,240)};
+  return r;
+}
+
+/* --- Guvenli ayristirma: "JSON parse hatasi" riskini kaldirir ---
+   Bos/kirpik/```json sarmali/metin ici JSON -> nesne ya da null.
+   Asla throw etmez, asla ham metin dondurmez. */
+function jevParseLoose(text){
+  if(text&&typeof text==="object")return text;
+  var s=String(text===null||typeof text==="undefined"?"":text);
+  if(!s)return null;
+  s=s.replace(/^\uFEFF/,"").trim();
+  s=s.replace(/^```(?:json)?/i,"").replace(/```$/,"").trim();
+  if(s.charAt(0)!=="{"){
+    var i=s.indexOf("{"),j=s.lastIndexOf("}");
+    if(i>-1&&j>i)s=s.slice(i,j+1);
+  }
+  try{return JSON.parse(s)}catch(e){return null}
+}
+
+function jevNow(){
+  try{if(typeof performance!=="undefined"&&performance&&typeof performance.now==="function")return performance.now()}catch(e){}
+  return Date.now();
+}
+function jevMs(t0){var v=Math.round(jevNow()-t0);return (isFinite(v)&&v>=0)?v:0}
+
+/* --- HTTP: TypeSafe'a dogrudan ya da Apps Script proxy'si uzerinden ---
+   Proxy, Jev API'si tarayici CORS'una izin vermedigi durum icin var.
+   Her iki yolda da yanit HAM METIN olarak doner; ayristirma tek yerde. */
+async function jevHttp(bodyRaw){
+  var ctl=null,timer=null;
+  try{
+    if(typeof AbortController!=="undefined"){
+      ctl=new AbortController();
+      timer=setTimeout(function(){try{ctl.abort()}catch(e){}},JEV_CONFIG.timeoutMs);
+    }
+  }catch(e){}
+  try{
+    if(JEV_CONFIG.transport==="gas"){
+      var url="",tok="";
+      try{url=localStorage.getItem("pk_drive_url")||"";tok=localStorage.getItem("pk_drive_token")||""}catch(e){}
+      if(!url||!tok)throw new Error("gas_proxy_not_configured");
+      var gopts={
+        method:"POST",
+        cache:"no-store",
+        headers:{"Content-Type":"text/plain;charset=utf-8"},
+        body:JSON.stringify({action:"jev",token:tok,jevKey:JEV_CONFIG.apiKey,provider:jevProvider(),request:bodyRaw})
+      };
+      if(ctl)gopts.signal=ctl.signal;
+      var gresp=await fetch(url,gopts);
+      var gtext=await gresp.text();
+      var gj=jevParseLoose(gtext);
+      if(!gj)throw new Error("gas_bad_response");
+      if(gj.ok!==true)throw new Error("gas_"+(gj.error||"error"));
+      return (typeof gj.data==="string")?gj.data:JSON.stringify(gj.data);
+    }
+
+    /* Dogrudan mod. OpenRouter icin istege bagli atif basliklari eklenir
+       (siralama/panel icin); islevsel degildir. */
+    var pconf=jevProviderConf();
+    var dheaders={"Content-Type":"application/json","Authorization":"Bearer "+JEV_CONFIG.apiKey};
+    if(pconf.referer)dheaders["HTTP-Referer"]=pconf.referer;
+    if(pconf.title)dheaders["X-OpenRouter-Title"]=pconf.title;
+    var opts={
+      method:"POST",
+      cache:"no-store",
+      headers:dheaders,
+      body:JSON.stringify(bodyRaw)
+    };
+    if(ctl)opts.signal=ctl.signal;
+    var resp=await fetch(jevEndpoint(),opts);
+    var text=await resp.text();
+    if(!resp.ok){
+      var detail="";
+      var eo=jevParseLoose(text);
+      if(eo&&eo.error)detail=String(eo.error.message||JSON.stringify(eo.error));
+      throw new Error("http_"+(resp.status||"")+(detail?(":"+detail.slice(0,160)):""));
+    }
+    return text;
+  }finally{
+    if(timer)clearTimeout(timer);
+  }
+}
+
+/* Jev'e sor (uzak motor). Asla throw etmez: her hata tipli jevFail sonucudur,
+   boylece cagiran kod try/catch yazmak zorunda kalmaz. */
+async function jevAskRemote(state,questions,lang){
+  var t0=jevNow();
+  var tr=(lang==="tr");
+  try{
+    var text=await jevHttp({model:jevModelId(),state:state,questions:questions});
+    var ms=jevMs(t0);
+    var raw=jevParseLoose(text);
+    if(!raw){
+      jevCacheWrite({ok:false,engine:"typesafe",code:"bad_json",latencyMs:ms,ts:Date.now()});
+      return jevFail("typesafe","bad_json",tr?"Jev yaniti okunamadi (gecersiz JSON); yerel karar kullanildi.":"Could not read Jev response (invalid JSON); local decision used.",{latencyMs:ms});
+    }
+    if(raw.error){
+      var em=(raw.error&&raw.error.message)?String(raw.error.message):JSON.stringify(raw.error);
+      jevCacheWrite({ok:false,engine:"typesafe",code:"api_error",latencyMs:ms,ts:Date.now()});
+      return jevFail("typesafe","api_error",em.slice(0,200),{latencyMs:ms});
+    }
+    var norm=jevNormalizeAnswers(raw,questions);
+    var res=jevResult("typesafe",norm.answers,norm.invalid,{latencyMs:ms,model:raw.model||null,usage:raw.usage||null});
+    jevCacheWrite({ok:res.ok,engine:"typesafe",model:res.model,latencyMs:ms,invalid:norm.invalid.length,ts:Date.now()});
+    return res;
+  }catch(e){
+    var ms2=jevMs(t0);
+    var msg=String((e&&e.message)||e||"");
+    var code=/abort/i.test(msg)?"timeout":(/gas_proxy_not_configured/.test(msg)?"gas_proxy_not_configured":(/gas_bad_response|^gas_/.test(msg)?"gas_error":(/^http_40[13]/.test(msg)?"unauthorized":(/^http_/.test(msg)?"http_error":"network"))));
+    var human;
+    if(code==="timeout")human=tr?"Jev zaman asimina ugradi; yerel karar kullanildi.":"Jev timed out; local decision used.";
+    else if(code==="gas_proxy_not_configured")human=tr?"Proxy icin once Drive Senkron ayarlarini doldur.":"Fill in Drive Sync settings first to use the proxy.";
+    else if(code==="unauthorized")human=tr?"Jev anahtari reddedildi (401/403). Ayarlardan kontrol et.":"Jev rejected the key (401/403). Check Settings.";
+    else if(code==="gas_error")human=tr?"Proxy hatasi: "+msg.slice(0,120):"Proxy error: "+msg.slice(0,120);
+    else if(code==="http_error")human=msg.slice(0,200);
+    else human=tr?"Jev'e ulasilamadi (ag/CORS); yerel karar kullanildi.":"Could not reach Jev (network/CORS); local decision used.";
+    jevCacheWrite({ok:false,engine:"typesafe",code:code,latencyMs:ms2,ts:Date.now()});
+    return jevFail("typesafe",code,human,{latencyMs:ms2});
+  }
+}
+
+/* ============================================================
+   YEREL SYSTEM ONE CEKIRDEGI
+   Ayni soru tiplerini ayni tipli sekilde yanitlar, ama AG YOKTUR
+   (~0 ms). Bir soru icin skorlayici kayitli degilse "abstain"
+   (confidence=0) doner; uydurmaz. Cagiran modul bu durumda
+   deterministik koda duser.
+   ============================================================ */
+var JEV_SCORERS={};
+function jevRegisterScorer(name,fn){JEV_SCORERS[name]=fn}
+
+/* Logitleri olasiliga cevir + guven hesapla.
+   guven = top - 0.5*ikinci  (TypeSafe'in yayinladigi degerlerle ortusur:
+   0.85/0.15->0.78, 0.56/0.44->0.33, 1.0/0.0->1.0) */
+function jevSoftmax(logits){
+  var res={probabilities:{},best:"",top:0,second:0,confidence:0,abstain:true};
+  var keys=Object.keys(logits||{});
+  if(keys.length===0)return res;
+  var finite=keys.filter(function(k){return typeof logits[k]==="number"&&isFinite(logits[k])});
+  if(finite.length===0)return res;
+  var max=-Infinity;
+  finite.forEach(function(k){if(logits[k]>max)max=logits[k]});
+  var sum=0,exps={};
+  finite.forEach(function(k){var e=Math.exp(logits[k]-max);exps[k]=e;sum+=e});
+  keys.forEach(function(k){res.probabilities[k]=(typeof exps[k]==="number")?(exps[k]/sum):0});
+  keys.forEach(function(k){
+    var p=res.probabilities[k];
+    if(p>res.top){res.second=res.top;res.top=p;res.best=k}
+    else if(p>res.second){res.second=p}
+  });
+  res.confidence=Math.max(0,Math.min(1,res.top-0.5*res.second));
+  res.abstain=false;
+  return res;
+}
+
+/* Skorlayici ham ciktisini TIPLI cevaba cevirir (uzak yanitla ayni sekil) */
+function jevLocalAnswer(q,raw){
+  if(!q||!JEV_QUESTION_TYPES[q.type])return null;
+  var isAbstain=(raw===null||typeof raw==="undefined");
+
+  if(q.type==="noul"){
+    var p=isAbstain?null:jevClamp01((typeof raw==="number")?raw:raw.p);
+    if(p===null)return {type:"noul",noul:0.5,confidence:0,valid:true,abstain:true};
+    var c=(!isAbstain&&raw&&typeof raw.confidence==="number")?raw.confidence:0;
+    return {type:"noul",noul:p,confidence:c,valid:true,abstain:false};
+  }
+
+  if(q.type==="choice"){
+    var opts=Object.keys(q.criteria||{});
+    if(opts.length===0)return null;
+    var logits={};
+    opts.forEach(function(o){
+      var v=(!isAbstain&&raw&&raw.logits&&typeof raw.logits[o]==="number")?raw.logits[o]:null;
+      logits[o]=v;
+    });
+    var sm=jevSoftmax(logits);
+    if(sm.abstain){
+      var u={};
+      opts.forEach(function(o){u[o]=1/opts.length});
+      return {type:"choice",choice:opts[0],confidence:0,probabilities:u,valid:true,abstain:true};
+    }
+    return {type:"choice",choice:sm.best,confidence:sm.confidence,probabilities:sm.probabilities,valid:true,abstain:false};
+  }
+
+  /* score */
+  var levels=Array.isArray(q.criteria)?q.criteria:[];
+  if(levels.length===0)return null;
+  var legend={};
+  levels.forEach(function(lv,i){legend[String(i)]=String(lv)});
+  var logits2={};
+  levels.forEach(function(_lv,i){
+    var v=(!isAbstain&&raw&&raw.logits&&typeof raw.logits[String(i)]==="number")?raw.logits[String(i)]:null;
+    logits2[String(i)]=v;
+  });
+  var sm2=jevSoftmax(logits2);
+  if(sm2.abstain){
+    var u2={};
+    levels.forEach(function(_lv,i){u2[String(i)]=1/levels.length});
+    return {type:"score",score:Math.floor((levels.length-1)/2),confidence:0,legend:legend,probabilities:u2,valid:true,abstain:true};
+  }
+  return {type:"score",score:parseInt(sm2.best,10)||0,confidence:sm2.confidence,legend:legend,probabilities:sm2.probabilities,valid:true,abstain:false};
+}
+
+/* Yerel yanitlar: senkron, ag yok, ~0 ms. */
+function jevAskLocal(state,questions,plan,lang){
+  var out={},invalid=[];
+  Object.keys(questions||{}).forEach(function(k){
+    var q=questions[k];
+    if(!q||!JEV_QUESTION_TYPES[q.type]){invalid.push({q:k,reason:"bad_question"});return}
+    var name=plan?plan[k]:null;
+    var fn=name?JEV_SCORERS[name]:null;
+    var raw=null;
+    if(typeof fn==="function"){
+      try{raw=fn(state,q,lang||"tr")}catch(e){raw=null}
+    }
+    var a=jevLocalAnswer(q,raw);
+    if(!a){invalid.push({q:k,reason:"no_local_answer"});return}
+    if(a.abstain)invalid.push({q:k,reason:"abstain"});
+    out[k]=a;
+  });
+  return jevResult("local",out,invalid,{latencyMs:0,model:"local-system-one"});
+}
+
+/* ANA GIRIS NOKTASI
+   - onEarly(localResult): SENKRON cagrilir -> arayuz aninda karar alir.
+   - donus: yerel sonuc, ya da Jev API'si daha iyi yanit verdiginde uzak sonuc.
+   Hata/gecikme durumunda her zaman yerel sonuca duser. */
+async function jevAsk(opts){
+  var state=opts.state,questions=opts.questions,plan=opts.plan,lang=opts.lang||"tr";
+  var local=jevAskLocal(state,questions,plan,lang);
+  if(typeof opts.onEarly==="function"){try{opts.onEarly(local)}catch(e){}}
+  if(jevEngine()!=="typesafe"||opts.remote===false)return local;
+  var remote=await jevAskRemote(state,questions,lang);
+  if(!remote||!remote.ok)return local;
+  return remote;
+}
+
+/* ============================================================
+   MODUL 2'nin veri katmani: TURKCE METIN NORMALIZASYONU + SOZLUK
+   Amac: serbest metni tipli kategori secimine cevirmek.
+   Kural tabanli sozluk + kullanicinin KENDI gecmisi = kisisel prior.
+   ============================================================ */
+/* Turkce'ye duyarli normalizasyon: aksan/ek sorunlarini azaltir.
+   NFD ayristirma + birlesik isaretleri at -> "İ" bilesenine ayrilip
+   "i" olur (en-US locale'de bile tek harf kalir). */
+function jevNorm(s){
+  var t=String(s===null||typeof s==="undefined"?"":s);
+  try{if(t.normalize)t=t.normalize("NFD").replace(/[\u0300-\u036f]/g,"")}catch(e){}
+  try{t=t.toLocaleLowerCase("tr-TR")}catch(e){t=t.toLowerCase()}
+  return t.replace(/ı/g,"i").replace(/İ/g,"i").replace(/ş/g,"s").replace(/ğ/g,"g")
+          .replace(/ü/g,"u").replace(/ö/g,"o").replace(/ç/g,"c")
+          .replace(/[^a-z0-9]+/g," ").replace(/^ +| +$/g,"");
+}
+var JEV_STOP={"ve":1,"ile":1,"bir":1,"bu":1,"icin":1,"aldik":1,"aldim":1,"aldi":1,"alindi":1,
+  "yaptim":1,"yaptik":1,"odeme":0,"gittim":1,"geldi":1,"olan":1,"daha":1,"cok":1,"az":1,
+  "tl":1,"try":1,"lira":1,"tane":1,"adet":1,"kadar":1,"sonra":1,"yeni":1,"ilk":1,"bugun":1,
+  "the":1,"for":1,"and":1,"with":1,"from":1};
+function jevTokens(s){
+  var norm=jevNorm(s);
+  if(!norm)return [];
+  return norm.split(" ").filter(function(t){return t.length>=3&&!JEV_STOP[t]});
+}
+
+/* Kategori anahtar sozlugu: "*" isaretli olanlar marka/guclu sinyaldir.
+   Anahtarlar varsayilan kategori id'leriyle aynidir; kullanici kendi
+   kategorisini eklerse eslesme kategori etiketi uzerinden de yapilir. */
+var JEV_LEX={
+  market:"*migros *a101 *bim *sok *carrefour *sokmarket *metro *macrocenter *getir market supermarket manav kasap sebze meyve ekmek sut yumurta peynir zeytin makarna pirinc yag deterjan temizlik kagit havlu bakliyat kola cips biskuvi kahvaltilik konserve dondurulmus salca un seker cay kahve",
+  yemek:"*yemeksepeti *mcdonalds *burger *starbucks *dominos *pizza *kfc lokanta restoran kafe kahve cay corba doner kebap pide lahmacun tost simit borek tatl tatli pastane buf agiz yemek ogle aksam yemegi",
+  ulasim:"*istanbulkart *ankarakart *shell *opet *petrol *bp *total benzin motorin mazot yakit otobus metro metrobus tramvay taksi uber bitaksi dolmus bilet otopark kopru otoyol hgs ogs servis ucus ucak tren",
+  fatura:"*elektrik *dogalgaz *dogal *su *internet *turkcell *vodafone *turk *telekom fatura abonelik sayac endeks dogalgaz kwh kw elektrik su dogal gaz telefon fatura odeme aidat",
+  kira:"*kira kiraya ev kiralik apart daire konut mulk emlak aidat site yonetim",
+  abonelik:"*netflix *spotify *youtube *exxen *blutv *disney *amazon *apple *icloud *google *microsoft abonelik subscription uyelik aylik paket premium dergi gazete platform",
+  saglik:"*eczane *hastane *klinik *optik *medikal eczane ilac recete doktor muayene dis saglik tahlil laboratuvar vitamin takviye maske termometre fizyoterapi psikolog",
+  giyim:"*trendyol *hepsiburada *zara *lcw *koton *mavi *adidas *nike *boyner *defacto tisort gomlek pantolon ayakkabi ceket mont kazak corap camasir elbise etek kaban bot kiyafet giyim",
+  eglence:"*sinema *cinemaximum *biletix *biletinial *steam *playstation *xbox *nintendo sinema konser tiyatro festival oyun oyunu playstation kutu oyunu muzik album bar alkol bira sarap raki gezi tatil muze lunapark eglence",
+  krediodeme:"*kredi *bank *ziraat *garanti *isbank *akbank *yapikredi *vakif *halk *qnb *teb taksit kredi karti ekstre borclanma faiz anapara odeme aidat",
+  nakitavans:"*avans *nakit nakit avans cekim atm limit komisyon gecikme",
+  diger:"diger cesitli muhtelif belirsiz extra ekstra"
+};
+
+/* Sozluk indeksi: bir kez ayristirilir (her cagride split maliyeti olmasin) */
+var JEV_LEX_INDEX=(function(){
+  var idx={};
+  Object.keys(JEV_LEX).forEach(function(cat){
+    var list=[];
+    String(JEV_LEX[cat]).split(" ").forEach(function(p){
+      if(!p)return;
+      var strong=(p.charAt(0)==="*");
+      var kw=jevNorm(strong?p.slice(1):p);
+      if(kw)list.push({kw:kw,w:strong?1.8:1.0});
+    });
+    idx[cat]=list;
+  });
+  return idx;
+})();
+
+/* Serbest metinden tutar ve not cikarma — MODEL DEGIL, SAF KOD.
+   "Trendyol'dan kulaklik aldik, 1200 TL" -> {amount:1200, note:"Trendyol'dan kulaklik"}
+   Turkce biçimler: "1.200,50 TL", "1200tl", "₺1.200", "1200 lira". */
+var JEV_CUR_RE=/(?:tl|try|lira|₺)/i;
+function s_textSafe(v){return (v===null||typeof v==="undefined")?"":String(v)}
+function jevExtractAmount(text){
+  var s=s_textSafe(text);
+  var re=/\d[\d.,]*/g,m,best=null,last=null;
+  while((m=re.exec(s))!==null){
+    var raw=m[0].replace(/[.,]+$/,"");
+    if(!raw)continue;
+    var v=parseNum(raw);
+    if(!isFinite(v)||v<=0)continue;
+    var after=s.slice(re.lastIndex,re.lastIndex+12);
+    var before=s.slice(Math.max(0,m.index-2),m.index);
+    /* yil / adet / tarih gibi sayilari ele */
+    if(/^\s*(adet|tane|kisi|gun|ay)\b/i.test(after))continue;
+    if(/^\d{1,2}[./]\d{1,2}[./]\d{2,4}/.test(raw))continue;
+    var cur=(JEV_CUR_RE.test(after)||JEV_CUR_RE.test(before));
+    var cand={value:v,index:m.index,raw:raw,currency:cur};
+    last=cand;
+    if(cur){best=cand;break}
+  }
+  return (best||last)||null;
+}
+/* Tutar ve para birimi kelimelerini nottan temizle */
+function jevCleanNote(text,amountInfo){
+  var s=String(s_textSafe(text));
+  if(amountInfo){
+    var i=s.indexOf(amountInfo.raw);
+    if(i>-1)s=s.slice(0,i)+" "+s.slice(i+amountInfo.raw.length);
+  }
+  s=s.replace(/(?:^|\s)[₺]?\s*(?:tl|try|lira)\b/gi," ");
+  s=s.replace(/\s*[₺]\s*/g," ");
+  s=s.replace(/\b(?:fiyat[ıi]?|tutar[ıi]?|toplam)\b/gi," ");
+  s=s.replace(/^[\s,;:\-–—.]+|[\s,;:\-–—.]+$/g,"");
+  s=s.replace(/\s{2,}/g," ");
+  s=s.replace(/^[,;:\-–—]\s*/,"");
+  return s.slice(0,200).trim();
+}
+
+/* ============================================================
+   MODUL 2 — AKILLI VE HIZLI ISLEM KATEGORIZASYONU
+   Giris : serbest metin ("Trendyol'dan kulaklik aldik, 1200 TL")
+   Cikis : TIPLI {category, confidence, requiresManualReview, amount, note}
+   Yaklasim: log-oncelik (kisisel gecmis) + log-olabilirlik (sozluk,
+   ek toleransli onek eslesmesi). JSON ayristirma YOK; cikti hep nesne.
+   ============================================================ */
+/* Kullanicinin kendi gecmisinden kategori onceligi + token->kategori ipucu */
+function jevHistoryStats(expenses,cats){
+  var cut=Date.now()-90*24*60*60*1000,share={},pairs={},tot=0;
+  (cats||[]).forEach(function(c){share[c.id]=0});
+  (expenses||[]).forEach(function(e){
+    if(!e||!e.category||share[e.category]===undefined)return;
+    var ts=Date.parse(e.date||"");
+    if(!isNaN(ts)&&ts<cut)return;
+    share[e.category]+=(+e.amount||0);tot+=(+e.amount||0);
+    jevTokens(e.note||"").forEach(function(tk){
+      if(!pairs[tk])pairs[tk]={};
+      pairs[tk][e.category]=(pairs[tk][e.category]||0)+1;
+    });
+  });
+  var prior={};
+  (cats||[]).forEach(function(c){prior[c.id]=tot>0?(share[c.id]/tot):(1/Math.max(1,cats.length))});
+  return {prior:prior,pairs:pairs,share:share,total:tot};
+}
+
+/* Kategori logitleri: log(oncelik) + sozluk kaniti + gecmis kaniti
+   Oncelik kutlesi 0.85 / 0.15 bolunur: %15 "harcama degil" secenegine
+   ayrilir. Boylece hicbir kanit yokken model "belirsiz" der, rastgele
+   bir kategori secmez. */
+var JEV_PRIOR_MASS=0.85;
+function jevCategoryLogits(state){
+  var cats=state.cats||[],tokens=state.tokens||[],hist=state.hist||{prior:{},pairs:{}};
+  var logits={},anyEvidence=false;
+  cats.forEach(function(c){
+    var pr=(hist.prior&&typeof hist.prior[c.id]==="number")?hist.prior[c.id]:(1/Math.max(1,cats.length));
+    var score=Math.log(Math.max(pr*JEV_PRIOR_MASS,0.002));
+    var evidence=0;
+    var list=JEV_LEX_INDEX[c.id];
+    if(list&&tokens.length){
+      for(var i=0;i<tokens.length;i++){
+        var tk=tokens[i];
+        for(var j=0;j<list.length;j++){
+          var kw=list[j].kw,w=list[j].w;
+          if(tk===kw)evidence+=2.2*w;
+          else if(kw.length>=4&&tk.indexOf(kw)===0)evidence+=1.8*w;   /* marketten ~ market */
+          else if(tk.length>=4&&kw.indexOf(tk)===0)evidence+=1.4*w;   /* market ~ markette  */
+        }
+      }
+    }
+    var lbl=jevNorm(c.label||"");
+    if(lbl){
+      tokens.forEach(function(t){
+        if(t===lbl)evidence+=2.6;
+        else if(lbl.length>=4&&t.indexOf(lbl)===0)evidence+=1.6;
+      });
+    }
+    if(hist.pairs&&tokens.length){
+      var best=0;
+      tokens.forEach(function(t){
+        var p=hist.pairs[t];
+        if(p&&p[c.id])best=Math.max(best,Math.min(3,p[c.id]));
+      });
+      evidence+=1.2*best;
+    }
+    if(evidence>0)anyEvidence=true;
+    logits[c.id]=score+evidence;
+  });
+  /* "harcama degil" tabani; hic kanit yoksa acikca one gecer */
+  logits.__none__=Math.log(0.15)+(anyEvidence?0:2.0);
+  return logits;
+}
+
+jevRegisterScorer("catPick",function(state){return {logits:jevCategoryLogits(state)}});
+jevRegisterScorer("catReview",function(state){
+  /* Birden fazla kategori one cikiyorsa ya da hic kanit yoksa "review" olasiligi artar */
+  var lg=jevCategoryLogits(state);
+  var keys=Object.keys(lg).filter(function(k){return k!=="__none__"});
+  keys.sort(function(a,b){return lg[b]-lg[a]});
+  var top=lg[keys[0]],second=(keys.length>1?lg[keys[1]]:top);
+  var p=1/(1+Math.exp((top-second)-0.9));
+  if(top<=Math.log(0.13))p=Math.max(p,0.8);
+  return {p:Math.round(p*1000)/1000};
+});
+
+function jevCategoryQuestions(cats,lang){
+  var tr=(lang==="tr");
+  var criteria={};
+  (cats||[]).forEach(function(c){criteria[c.id]=(c.icon?c.icon+" ":"")+c.label});
+  criteria.__none__=tr?"Harcama degil / alakasiz metin":"Not an expense / unrelated text";
+  return {
+    category:{
+      type:"choice",
+      instructions:{
+        question:tr?"Bu metin hangi harcama kategorisine ait?":"Which spending category does this text belong to?",
+        focus:tr?"Isletme/urun adlarina ve harcama turune bak; tutar ve tarih kategoriyi belirlemez.":"Look at merchant/product names and the type of spending; amounts and dates do not decide the category."
+      },
+      criteria:criteria
+    },
+    needs_review:{
+      type:"noul",
+      instructions:tr?"Metin birden fazla kategoriye uyuyor ya da kategori belirsiz":"The text fits several categories or the category is ambiguous"
+    }
+  };
+}
+var JEV_LOCAL_PLAN_CAT={category:"catPick",needs_review:"catReview"};
+
+/* TIPLI SONUC birlestirici: model yargisi + kod gercekleri.
+   {ok, category, confidence, requiresManualReview, amount, note, alternatives, engine} */
+function jevCategorizeCompose(text,cats,res,lang,amountInfo){
+  var tr=(lang==="tr");
+  var out={
+    ok:true,
+    text:s_textSafe(text),
+    category:null,
+    confidence:0,
+    requiresManualReview:true,
+    amount:(amountInfo?amountInfo.value:null),
+    amountRaw:(amountInfo?amountInfo.raw:null),
+    note:jevCleanNote(text,amountInfo),
+    alternatives:[],
+    engine:(res?res.engine:"local"),
+    latencyMs:(res?res.latencyMs:0),
+    error:null
+  };
+  var pick=(res&&res.answers)?res.answers.category:null;
+  if(!pick||pick.abstain||pick.confidence<=0){
+    /* Cekirdek/model karar veremedi: uydurmak yerine kullaniciya sor */
+    out.error=tr?"Kategori icin guvenilir karar yok; sen sec.":"No confident category decision; please choose.";
+    return out;
+  }
+  var probs=pick.probabilities||{};
+  var ranked=Object.keys(probs).map(function(k){return{k:k,p:probs[k]}}).sort(function(a,b){return b.p-a.p});
+  out.alternatives=ranked.slice(0,3).map(function(r){
+    return {category:(r.k==="__none__"?null:r.k),probability:Math.round(r.p*1000)/1000};
+  });
+  var review=(res&&res.answers)?res.answers.needs_review:null;
+  var reviewP=(review&&!review.abstain)?review.noul:0.5;
+
+  if(pick.choice==="__none__"){
+    out.confidence=pick.confidence;
+    out.error=tr?"Metin bir harcama gibi gorunmuyor.":"This text does not look like an expense.";
+    return out;
+  }
+  out.category=pick.choice;
+  out.confidence=pick.confidence;
+  var second=(out.alternatives.length>1?out.alternatives[1].probability:0);
+  var topP=probs[pick.choice]||0;
+  out.requiresManualReview=(
+    pick.confidence<JEV_CONFIG.reviewThreshold ||
+    reviewP>=0.6 ||
+    (topP>0&&second/topP>0.75)
+  );
+  return out;
+}
+
+/* Senkron (aninda, agsiz) kategori onerisi — yerel cekirdek.
+   Arayuz bunu render icinde cagirabilir; bekleme yoktur. */
+function jevCategorizeLocal(text,cats,hist,lang){
+  var amountInfo=jevExtractAmount(text);
+  var state={text:s_textSafe(text),tokens:jevTokens(text),cats:cats||[],hist:hist||{prior:{},pairs:{}}};
+  var questions=jevCategoryQuestions(cats,lang);
+  var res=jevAskLocal(state,questions,JEV_LOCAL_PLAN_CAT,lang);
+  return jevCategorizeCompose(text,cats,res,lang,amountInfo);
+}
+
+/* Asenkron surum: yerel sonucu ANINDA dondurur, sonra Jev API'si
+   daha emin bir karar verirse onu kullanir. Hata halinde yerel kalir. */
+async function jevCategorize(text,cats,hist,lang){
+  var amountInfo=jevExtractAmount(text);
+  var state={text:s_textSafe(text),tokens:jevTokens(text),cats:cats||[],hist:hist||{prior:{},pairs:{}}};
+  var questions=jevCategoryQuestions(cats,lang);
+  var res=await jevAsk({
+    state:state,
+    questions:questions,
+    plan:JEV_LOCAL_PLAN_CAT,
+    lang:lang,
+    onEarly:null
+  });
+  return jevCategorizeCompose(text,cats,res,lang,amountInfo);
+}
+
+/* ============================================================
+   MODUL 1 — ANLIK HARCAMA RISK KAPISI (Pre-Check / Triage)
+   Kullanici "Ekle" dedigi anda DeepSeek BEKLENMEZ; bu katman
+   TIpli {isAllowed, riskLevel, deficitAmount} uretir.
+   - Para matematigi kodda: deficit, ratio, projeksiyon.
+   - Model yalnizca YARGI uretir ve riski yukseltebilir (izin daralir).
+     Butce yoksa model karari en fazla "strain" olur (gereksiz blok yok).
+   ============================================================ */
+var JEV_RISK_LEVELS=["safe","watch","strain","breach"];
+function jevRiskIdx(lv){var i=JEV_RISK_LEVELS.indexOf(lv);return i<0?0:i}
+function jevRiskMax(a,b){return jevRiskIdx(a)>=jevRiskIdx(b)?a:b}
+
+var JEV_KW_REPEAT=["taksit","aidat","abonelik","her ay","aylik","kira","fatura","senet","vade","otomatik odeme","yenileme"];
+var JEV_KW_ESSENTIAL=["market","gida","ekmek","sut","yumurta","ilac","eczane","kira","fatura","elektrik","su","dogalgaz","internet","ulasim","benzin","otobus","okul","kitap","bebek","mama","kirtasiye"];
+var JEV_KW_LUXURY=["tatil","oyun","konser","sinema","hediye","lüks","alkol","sigara","kumar","takı","mücevher","abonelik"];
+function jevKeywordHits(text,list){
+  var n=jevNorm(text);
+  if(!n)return 0;
+  var hits=0;
+  (list||[]).forEach(function(k){
+    var kk=jevNorm(k);
+    if(kk&&n.indexOf(kk)!==-1)hits++;
+  });
+  return hits;
+}
+
+/* Kapinin yapisal durumu (Jev'e gonderilen "state") */
+function jevGateState(input){
+  var amount=+input.amount||0;
+  var budget=+input.budget||0;
+  var spent=+input.spent||0;
+  var after=spent+amount;
+  var deficit=budget>0?Math.max(0,after-budget):0;
+  var ratio=budget>0?(after/budget):0;
+  var dom=Math.max(1,+input.dayOfMonth||1);
+  var dim=Math.max(1,+input.daysInMonth||30);
+  var rem=Math.max(0,dim-dom);
+  var dailyRate=dom>0?(spent/dom):0;
+  var projected=budget>0?Math.round(after+dailyRate*rem):0;
+  var incRatio=(+input.monthIncome>0)?(amount/(+input.monthIncome)):0;
+  return {
+    amount:Math.round(amount*100)/100,
+    category:input.catLabel||input.categoryId||"",
+    note:String(s_textSafe(input.note)).slice(0,120),
+    budget:Math.round(budget*100)/100,
+    spentThisMonth:Math.round(spent*100)/100,
+    spentAfter:Math.round(after*100)/100,
+    deficit:Math.round(deficit*100)/100,
+    budgetUsedRatio:Math.round(ratio*1000)/1000,
+    dayOfMonth:dom,
+    daysInMonth:dim,
+    projectedMonthEnd:projected,
+    monthIncome:Math.round((+input.monthIncome||0)*100)/100,
+    monthExpense:Math.round((+input.monthExpense||0)*100)/100,
+    amountToIncomeRatio:Math.round(incRatio*1000)/1000,
+    prevMonthSameCategory:Math.round((+input.prevMonthSpent||0)*100)/100,
+    repeatWords:jevKeywordHits(input.note,JEV_KW_REPEAT),
+    essentialWords:jevKeywordHits(input.note,JEV_KW_ESSENTIAL),
+    luxuryWords:jevKeywordHits(input.note,JEV_KW_LUXURY)
+  };
+}
+
+/* --- Yerel skorlayicilar (hepsi SAF MATEMATIK, uydurma yok) --- */
+jevRegisterScorer("gateBudgetFit",function(st){
+  var p;
+  if(st.budget>0){
+    var r=st.budgetUsedRatio;
+    /* r=0.92 -> 0.5 ; r>=1.02 -> ~0.1 ; r<=0.6 -> ~0.95 */
+    p=1/(1+Math.exp((r-0.92)/0.10));
+  }else{
+    /* Butce tanimli degil: aylik gelire oranla */
+    p=st.amountToIncomeRatio<=0.05?0.92:(st.amountToIncomeRatio<=0.12?0.65:0.35);
+    if(st.amountToIncomeRatio<=0)p=0.85;
+  }
+  if(st.repeatWords>0)p-=0.12;                 /* tekrarlayan -> butceyi daha cok zorlar */
+  if(st.essentialWords>0)p+=0.10;
+  if(st.luxuryWords>0)p-=0.08;
+  return {p:Math.max(0.02,Math.min(0.98,Math.round(p*1000)/1000))};
+});
+jevRegisterScorer("gateRisk",function(st){
+  var logits;
+  if(st.budget>0){
+    var r=st.budgetUsedRatio;
+    logits={
+      safe:2.2*(0.95-r),
+      watch:2.2*(1-Math.abs(r-0.74)/0.26),
+      strain:2.4*(1-Math.abs(r-0.95)/0.17),
+      breach:3.0*(r-1.0)
+    };
+  }else{
+    var i=st.amountToIncomeRatio;
+    logits={
+      safe:2.0*(0.08-i)*10,
+      watch:1.8*(1-Math.abs(i-0.06)/0.06),
+      strain:2.0*(1-Math.abs(i-0.14)/0.10),
+      breach:-1.2
+    };
+  }
+  if(st.essentialWords>0){logits.safe+=0.35;logits.breach-=0.25}
+  if(st.luxuryWords>0){logits.watch+=0.3;logits.strain+=0.2}
+  return {logits:logits};
+});
+jevRegisterScorer("gateRepeat",function(st){
+  var p=0.06;
+  if(st.repeatWords>0)p+=0.45+0.12*Math.min(3,st.repeatWords);
+  if(st.prevMonthSameCategory>0&&st.amount>0){
+    /* Gecen ay ayni kategoride benzer tutar varsa tekrar olasiligi artar */
+    var sim=1-Math.min(1,Math.abs(st.prevMonthSameCategory-st.amount)/Math.max(st.amount,st.prevMonthSameCategory,1));
+    p+=0.35*sim;
+  }
+  return {p:Math.max(0.02,Math.min(0.97,Math.round(p*1000)/1000))};
+});
+jevRegisterScorer("gateEssential",function(st){
+  var p=0.35;
+  p+=0.22*Math.min(3,st.essentialWords);
+  p-=0.25*Math.min(3,st.luxuryWords);
+  return {p:Math.max(0.03,Math.min(0.97,Math.round(p*1000)/1000))};
+});
+var JEV_LOCAL_PLAN_GATE={budget_fit:"gateBudgetFit",risk_class:"gateRisk",repeat_risk:"gateRepeat",essential:"gateEssential"};
+
+/* Risk kapisinin soru seti — Jev'e gonderilen tek istek, 4 tipLI soru */
+function jevGateQuestions(lang){
+  var tr=(lang==="tr");
+  return {
+    budget_fit:{
+      type:"noul",
+      instructions:tr?"state.amount tutarindaki bu harcama, state.budget butcesini asmadan karsilanabilir":"This expense of state.amount fits within state.budget without exceeding it"
+    },
+    risk_class:{
+      type:"choice",
+      instructions:{
+        question:tr?"Bu harcamanin butce riski hangi sinifta?":"Which risk class does this expense fall into?",
+        focus:tr?"state.budgetUsedRatio, state.deficit ve state.projectedMonthEnd alanlarina bak.":"Look at state.budgetUsedRatio, state.deficit and state.projectedMonthEnd."
+      },
+      criteria:{
+        safe:tr?"Butce rahat; sorun yok":"Budget is comfortable; no concern",
+        watch:tr?"Butce icinde ama takip edilmeli":"Within budget but worth watching",
+        strain:tr?"Butceyi zorluyor; ay sonu riskli":"Straining the budget; month-end looks risky",
+        breach:tr?"Butce asiliyor":"Budget is exceeded"
+      }
+    },
+    repeat_risk:{
+      type:"noul",
+      instructions:tr?"Bu harcamanin tekrarlayan bir odeme olmasi muhtemel (taksit, aidat, abonelik vb.)":"This expense is likely a recurring payment (installment, dues, subscription, etc.)"
+    },
+    essential:{
+      type:"noul",
+      instructions:tr?"Bu harcama zorunlu/temel bir ihtiyac (market, ilac, kira, fatura, ulasim)":"This expense is a necessary/essential need (groceries, medicine, rent, bills, transport)"
+    }
+  };
+}
+
+/* ============================================================
+   TIPLI KAPI KARARI
+   Donen nesne (arayuzun bekledigi sozlesme):
+   {ok, isAllowed, riskLevel, deficitAmount, confidence, source,
+    reasons[], projectedMonthEnd, repeatRisk, essential, engine, latencyMs}
+   ============================================================ */
+function jevComposeGateVerdict(input,res,lang){
+  var st=jevGateState(input);
+  var out={
+    ok:true,
+    isAllowed:true,
+    riskLevel:"safe",
+    deficitAmount:st.deficit,
+    confidence:0,
+    source:"code",
+    reasons:[],
+    projectedMonthEnd:st.projectedMonthEnd,
+    repeatRisk:null,
+    essential:null,
+    amount:st.amount,
+    budget:st.budget,
+    spentAfter:st.spentAfter,
+    budgetUsedRatio:st.budgetUsedRatio,
+    engine:(res?res.engine:"local"),
+    latencyMs:(res?res.latencyMs:0),
+    error:null
+  };
+
+  /* --- 1) KOD KARARI: para gercekleri --- */
+  var codeLevel;
+  if(st.budget>0){
+    if(st.deficit>0)codeLevel="breach";
+    else if(st.budgetUsedRatio>=0.9)codeLevel="strain";
+    else if(st.budgetUsedRatio>=0.72)codeLevel="watch";
+    else codeLevel="safe";
+  }else{
+    if(st.amountToIncomeRatio>=0.15)codeLevel="strain";
+    else if(st.amountToIncomeRatio>=0.07)codeLevel="watch";
+    else codeLevel="safe";
+  }
+
+  /* --- 2) MODEL YARGISI: yalnizca riski YUKSELTEBILIR --- */
+  var A=(res&&res.answers)||{};
+  var riskAns=A.risk_class, fitAns=A.budget_fit, repAns=A.repeat_risk, essAns=A.essential;
+  var modelLevel=null,modelConf=0;
+  if(riskAns&&!riskAns.abstain&&riskAns.confidence>0){
+    modelLevel=riskAns.choice;modelConf=riskAns.confidence;
+    if(st.budget<=0&&modelLevel==="breach")modelLevel="strain";  /* butce yoksa blok yok */
+  }
+  var finalLevel=codeLevel;
+  if(modelLevel&&modelConf>=0.2){
+    finalLevel=jevRiskMax(codeLevel,modelLevel);
+  }
+  out.riskLevel=finalLevel;
+  out.confidence=modelConf>0?Math.min(1,modelConf):0;
+  if(modelLevel)out.source=out.engine;
+
+  /* --- 3) SEBEP KODLARI (arayuz bunlari yerellestirir) --- */
+  if(st.budget<=0)out.reasons.push("no_budget");
+  if(st.deficit>0)out.reasons.push("over_budget");
+  else if(st.budget>0&&st.budgetUsedRatio>=0.9)out.reasons.push("near_limit");
+  if(st.budget>0&&st.projectedMonthEnd>st.budget)out.reasons.push("projection_over");
+  if(fitAns&&!fitAns.abstain&&fitAns.noul<0.3&&st.budget>0)out.reasons.push("model_veto");
+  if(repAns&&!repAns.abstain&&repAns.noul>=0.6){out.reasons.push("likely_recurring");out.repeatRisk=repAns.noul}
+  if(essAns&&!essAns.abstain){out.essential=essAns.noul;if(essAns.noul<0.3)out.reasons.push("non_essential")}
+
+  /* --- 4) IZIN: yalnizca DARALTILIR --- */
+  out.isAllowed=(out.riskLevel!=="breach");
+  if(out.reasons.indexOf("model_veto")!==-1)out.isAllowed=false;
+
+  /* Kaynak etiketi: model yargisi yoksa karar tamamen koddan gelmistir */
+  if(!modelLevel||modelConf<=0)out.source="code";
+  out.ok=true;
+  return out;
+}
+
+/* Senkron (aninda) kapi karari: ag yok, bekleme yok -> "Ekle" aninda uyari.
+   Arayuz bunu render icinde cagirir; hicbir Promise beklenmez. */
+function jevRiskGateSync(input,lang){
+  var state=jevGateState(input);
+  var questions=jevGateQuestions(lang);
+  var res=jevAskLocal(state,questions,JEV_LOCAL_PLAN_GATE,lang);
+  return jevComposeGateVerdict(input,res,lang);
+}
+
+/* Asenkron kapi: once yerel karari ANINDA verir (onEarly), Jev API'si
+   daha iyi bir yargi dondururse onu kullanir (onFinal). */
+async function jevRiskGate(input,lang,onEarly,onFinal){
+  var state=jevGateState(input);
+  var questions=jevGateQuestions(lang);
+  var res=await jevAsk({
+    state:state,
+    questions:questions,
+    plan:JEV_LOCAL_PLAN_GATE,
+    lang:lang,
+    onEarly:function(localRes){
+      if(typeof onEarly==="function")onEarly(jevComposeGateVerdict(input,localRes,lang));
+    }
+  });
+  var verdict=jevComposeGateVerdict(input,res,lang);
+  if(typeof onFinal==="function")onFinal(verdict);
+  return verdict;
+}
+
+/* ============================================================
+   MODUL 3 — ARKA PLAN BUTCE ANOMALI TARAMASI (Background Watcher)
+   Hafif, saf JS olasilik testleri. Ag yok, DeepSeek yok, ~1 ms.
+   Testler: degistirilmis z (MAD), Poisson kuyruk, Wilson ust sinir,
+   Welch t (iki ornek), log-normal tek tutar sapmasi.
+   ============================================================ */
+/* Gauss hata fonksiyonu (Abramowitz-Stegun 7.1.26, ~1e-7 hata) */
+function jevErr(x){
+  var s=(x<0)?-1:1;
+  x=Math.abs(x);
+  var t=1/(1+0.3275911*x);
+  var y=1-((((1.061405429*t-1.453152027)*t+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);
+  return s*y;
+}
+function jevNormCdf(z){return 0.5*(1+jevErr(z/Math.SQRT2))}
+function jevNormSf(z){return 1-jevNormCdf(z)}          /* P(Z > z) */
+
+function jevSum(a){var s=0;for(var i=0;i<a.length;i++)s+=a[i];return s}
+function jevMean(a){return a.length?jevSum(a)/a.length:0}
+function jevVariance(a,m){
+  if(a.length<2)return 0;
+  m=(typeof m==="number")?m:jevMean(a);
+  var s=0;
+  for(var i=0;i<a.length;i++){var d=a[i]-m;s+=d*d}
+  return s/(a.length-1);
+}
+function jevStd(a){return Math.sqrt(jevVariance(a))}
+function jevMedian(a){
+  if(!a.length)return 0;
+  var b=a.slice().sort(function(x,y){return x-y});
+  var mid=Math.floor(b.length/2);
+  return b.length%2?b[mid]:(b[mid-1]+b[mid])/2;
+}
+/* MAD = medyan mutlak sapma; aykiri degerlere karsi dayaniklidir */
+function jevMad(a){
+  if(!a.length)return 0;
+  var m=jevMedian(a),dev=[];
+  for(var i=0;i<a.length;i++)dev.push(Math.abs(a[i]-m));
+  return jevMedian(dev);
+}
+/* Degistirilmis z skoru: 0.6745*(x-medyan)/MAD  (|z|>3.5 = aykiri)
+   MAD = 0 ise (degerlerin cogu ayni) Iglewicz & Hoaglin onerisiyle
+   sigma ~ 1.253 * ortalama mutlak sapma kullanilir; aksi halde
+   "hep ayni tutar, bir gun dev tutar" deseni yakalanmaz. */
+function jevModifiedZ(values,x){
+  if(!values||values.length<4)return 0;
+  var m=jevMedian(values),mad=jevMad(values);
+  if(mad>1e-9)return 0.6745*(x-m)/mad;
+  var sum=0;
+  for(var i=0;i<values.length;i++)sum+=Math.abs(values[i]-m);
+  var meanAD=sum/values.length;
+  if(meanAD>1e-9)return (x-m)/(1.253*meanAD);
+  return 0;
+}
+/* log(i!) — Poisson pmf'ini tasmasin diye log uzayinda */
+function jevLogFact(n){
+  var s=0;
+  for(var i=2;i<=n;i++)s+=Math.log(i);
+  return s;
+}
+/* P(X >= k), X ~ Poisson(lambda) — "bugun cok fazla islem" testi */
+function jevPoissonTailGe(k,lambda){
+  if(!(lambda>0))return (k<=0)?1:0;
+  k=Math.max(0,Math.round(k));
+  if(k<=0)return 1;
+  if(lambda>60){
+    var z=(k-0.5-lambda)/Math.sqrt(lambda);           /* sureklilik duzeltmesi */
+    return Math.max(0,Math.min(1,jevNormSf(z)));
+  }
+  var cum=0,lf=0;
+  for(var i=0;i<k;i++){
+    if(i>0)lf+=Math.log(i);
+    cum+=Math.exp(i*Math.log(lambda)-lambda-lf);
+  }
+  return Math.max(0,Math.min(1,1-cum));
+}
+/* Wilson ust sinir: az sayida gozlemde oran tahmini icin guvenilir */
+function jevWilsonUpper(k,n,z){
+  if(n<=0)return 1;
+  z=(typeof z==="number")?z:1.645;                    /* %95 tek yonlu */
+  var p=k/n,z2=z*z;
+  return (p+z2/(2*n)+z*Math.sqrt(p*(1-p)/n+z2/(4*n*n)))/(1+z2/n);
+}
+/* Welch t testi (esit olmayan varyans) — ay-ay sapma testi */
+function jevWelch(a,b){
+  var na=a.length,nb=b.length;
+  if(na<2||nb<2)return null;
+  var ma=jevMean(a),mb=jevMean(b);
+  var va=jevVariance(a,ma),vb=jevVariance(b,mb);
+  var se=Math.sqrt(va/na+vb/nb);
+  if(!(se>1e-9))return null;
+  var t=(ma-mb)/se;
+  var num=Math.pow(va/na+vb/nb,2);
+  var den=(Math.pow(va/na,2)/(na-1))+(Math.pow(vb/nb,2)/(nb-1));
+  if(!(den>0))return null;
+  var df=num/den;
+  if(!isFinite(df)||df<=0)return null;
+  return {t:t,df:df,p:Math.max(0,Math.min(1,2*jevNormSf(Math.abs(t)))),meanA:ma,meanB:mb};
+}
+
+/* Esikler tek yerde: ayarlanabilir, test edilebilir */
+var JEV_THRESHOLDS={
+  dailySpikeZ:3.5,        /* |degistirilmis z| esigi */
+  dailySpikeP:0.02,
+  freqSpikeP:0.01,        /* Poisson kuyruk olasiligi */
+  budgetBreachP:0.6,      /* ay sonu asim olasiligi esigi */
+  overspendRate:0.4,      /* Wilson ust siniri esigi */
+  momShiftP:0.05,         /* Welch t p-degeri */
+  amountOutlierZ:3.0,
+  minHistoryDays:5,
+  maxAnomalyAgeDays:30
+};
+
+function jevDayList(expenses){
+  var byDay={};
+  (expenses||[]).forEach(function(e){
+    var d=String((e&&e.date)||"").slice(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return;
+    if(!byDay[d])byDay[d]=[];
+    byDay[d].push(e);
+  });
+  return byDay;
+}
+/* Bir kategori icin son `days` gunun gunluk toplamlari (bos gun = 0) */
+function jevDailySeries(byDay,catId,days,todayKey){
+  var values=[],keys=[];
+  var t=prd(todayKey);
+  for(var i=days-1;i>=0;i--){
+    var d=new Date(t.y,t.m,t.d-i);
+    var k=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    var s=0;
+    (byDay[k]||[]).forEach(function(e){if(e.category===catId)s+=(+e.amount||0)});
+    values.push(s);keys.push(k);
+  }
+  return {values:values,keys:keys};
+}
+
+/* Tek anomali kaydi: tipli ve yerellestirilebilir (metin arayuzde uretilir) */
+function jevAnomaly(kind,severity,categoryId,score,pValue,data){
+  data=data||{};
+  return {
+    id:kind+"|"+categoryId+"|"+(data.dayKey||""),
+    kind:kind,
+    severity:severity,
+    categoryId:categoryId,
+    score:Math.round(score*1000)/1000,
+    pValue:Math.round(pValue*100000)/100000,
+    data:data,
+    ts:Date.now()
+  };
+}
+
+/* ============================================================
+   ANA TARAMA — saf kod, ~1 ms, ag yok.
+   tc: {expenses, budgets, categories}
+   Donus: tipli anomali listesi (onem sirali, tekrarsiz, sinirli).
+   ============================================================ */
+function jevScanAnomalies(tc,lang,todayKey){
+  var out=[];
+  var expenses=(tc&&tc.expenses)||[];
+  var cats=(tc&&tc.categories)||[];
+  var budgets=(tc&&tc.budgets)||{};
+  var today=todayKey||tdy();
+  if(expenses.length<6||cats.length===0)return out;
+
+  var byDay=jevDayList(expenses);
+  var t=prd(today);
+  var dim=new Date(t.y,t.m+1,0).getDate();
+  var mk=today.slice(0,7);
+  var prevDate=new Date(t.y,t.m-1,1);
+  var prevMK=prevDate.getFullYear()+"-"+String(prevDate.getMonth()+1).padStart(2,"0");
+  var dom=t.d;
+  var TH=JEV_THRESHOLDS;
+
+  cats.forEach(function(c){
+    var series=jevDailySeries(byDay,c.id,TH.maxAnomalyAgeDays,today);
+    var prior=series.values.slice(0,-1);
+    var todayVal=series.values[series.values.length-1]||0;
+    var todayCount=((byDay[today]||[]).filter(function(e){return e.category===c.id})).length;
+
+    /* A1) Gunluk toplam sicramasi — degistirilmis z (MAD tabanli, dayanikli) */
+    var nonZero=prior.filter(function(v){return v>0});
+    if(nonZero.length>=TH.minHistoryDays&&todayVal>0){
+      var z=jevModifiedZ(prior,todayVal);
+      var med=jevMedian(nonZero);
+      if(Math.abs(z)>=TH.dailySpikeZ&&todayVal>med*1.8){
+        var p=jevNormSf(Math.abs(z));
+        if(p<=TH.dailySpikeP){
+          out.push(jevAnomaly("cat_daily_spike",(Math.abs(z)>=5?"high":"warn"),c.id,z,p,{
+            today:Math.round(todayVal*100)/100,
+            typical:Math.round(med*100)/100,
+            dayKey:today
+          }));
+        }
+      }
+    }
+
+    /* A2) Islem sikligi sicramasi — Poisson kuyruk testi P(X>=k) */
+    var totalTx=0;
+    series.keys.forEach(function(k){
+      totalTx+=((byDay[k]||[]).filter(function(e){return e.category===c.id})).length;
+    });
+    var activeDays=series.keys.filter(function(k){
+      return ((byDay[k]||[]).filter(function(e){return e.category===c.id})).length>0;
+    }).length;
+    if(activeDays>=TH.minHistoryDays&&todayCount>=3){
+      var lambda=totalTx/Math.max(1,series.keys.length);
+      var pf=jevPoissonTailGe(todayCount,lambda);
+      if(pf<=TH.freqSpikeP){
+        out.push(jevAnomaly("freq_spike",(pf<=0.001?"high":"warn"),c.id,Math.min(9,-Math.log10(Math.max(pf,1e-9))),pf,{
+          todayCount:todayCount,
+          expected:Math.round(lambda*100)/100,
+          dayKey:today
+        }));
+      }
+    }
+
+    /* A3) Ay sonu butce asim projeksiyonu.
+       Kalan harcama X ~ Normal(mu, sigma); P(spent+X > budget) hesaplanir. */
+    var budget=+budgets[c.id]||0;
+    var spentSoFar=jevSum(series.values);
+    var remDays=Math.max(0,dim-dom);
+    var dailyAvg=spentSoFar/Math.max(1,dom);
+    var projected=spentSoFar+dailyAvg*remDays;
+    if(budget>0){
+      var breachP=0;
+      if(spentSoFar>=budget)breachP=1;
+      else if(dailyAvg>0&&remDays>0){
+        var mu=dailyAvg*remDays;
+        var sd=Math.max(dailyAvg*0.5,budget*0.03,1)*Math.sqrt(remDays);
+        breachP=jevNormSf((budget-spentSoFar-mu)/sd);
+      }
+      if(projected>budget&&breachP>=TH.budgetBreachP){
+        out.push(jevAnomaly("budget_projection",(breachP>=0.8?"high":"warn"),c.id,breachP,1-breachP,{
+          budget:Math.round(budget*100)/100,
+          projected:Math.round(projected*100)/100,
+          spent:Math.round(spentSoFar*100)/100,
+          breachProbability:Math.round(breachP*1000)/1000,
+          dayKey:today
+        }));
+      }
+    }
+
+    /* A3b) Sik asim orani — Wilson ust siniri (az veride guvenilir oran tahmini) */
+    if(budget>0&&dim>0){
+      var dailyCap=budget/dim;
+      var win=series.values.slice(-15,-1);          /* son 14 tam gun */
+      if(win.length>=7){
+        var over=win.filter(function(v){return v>dailyCap*1.4}).length;
+        var upper=jevWilsonUpper(over,win.length,1.645);
+        if(upper>=TH.overspendRate&&over>=3){
+          out.push(jevAnomaly("overspend_rate",(upper>=0.6?"high":"warn"),c.id,upper,1-upper,{
+            daysOver:over,
+            daysChecked:win.length,
+            dailyCap:Math.round(dailyCap*100)/100,
+            upperRate:Math.round(upper*1000)/1000,
+            dayKey:today
+          }));
+        }
+      }
+    }
+
+    /* A4) Ay-ay sapma — Welch t testi (gunluk seriler, bu ay vs gecen ay) */
+    var prevDays=new Date(prevDate.getFullYear(),prevDate.getMonth()+1,0).getDate();
+    var curDaily=[],prevDaily=[];
+    for(var i=0;i<dom;i++){
+      var k=today.slice(0,8)+String(i+1).padStart(2,"0");
+      var s=0;
+      (byDay[k]||[]).forEach(function(e){if(e.category===c.id)s+=(+e.amount||0)});
+      curDaily.push(s);
+    }
+    for(var j=0;j<prevDays;j++){
+      var kp=prevMK+"-"+String(j+1).padStart(2,"0");
+      var sp=0;
+      (byDay[kp]||[]).forEach(function(e){if(e.category===c.id)sp+=(+e.amount||0)});
+      prevDaily.push(sp);
+    }
+    var w=jevWelch(curDaily,prevDaily);
+    if(w&&w.p<=TH.momShiftP&&w.meanA>w.meanB&&w.meanA>0){
+      out.push(jevAnomaly("mom_shift",(w.p<=0.01?"high":"warn"),c.id,Math.min(9,Math.abs(w.t)),w.p,{
+        thisMonthDailyAvg:Math.round(w.meanA*100)/100,
+        lastMonthDailyAvg:Math.round(w.meanB*100)/100,
+        dayKey:mk
+      }));
+    }
+
+    /* A5) Tek tutar aykirisi — log-normal z (tutarlar carpik dagilir) */
+    var amounts=[];
+    expenses.forEach(function(e){if(e.category===c.id&&(+e.amount||0)>0)amounts.push(+e.amount)});
+    if(amounts.length>=8){
+      var logs=amounts.map(function(v){return Math.log(v)});
+      var lm=jevMean(logs),lsd=Math.max(jevStd(logs),1e-6);
+      (byDay[today]||[]).filter(function(e){return e.category===c.id}).forEach(function(e){
+        var v=+e.amount||0;
+        if(v<=0)return;
+        var z=(Math.log(v)-lm)/lsd;
+        if(z>=TH.amountOutlierZ){
+          out.push(jevAnomaly("amount_outlier",(z>=4?"high":"warn"),c.id,z,jevNormSf(z),{
+            amount:Math.round(v*100)/100,
+            typical:Math.round(Math.exp(lm)*100)/100,
+            note:String(s_textSafe(e.note)).slice(0,80),
+            dayKey:today
+          }));
+        }
+      });
+    }
+  });
+
+  /* B) SESSIZ ABONELIK: ayni not+tutar 3+ ayda tekrar ediyor ama kayitli degil.
+     Bu, "farkinda olmadigin harcama" sinifidir; olasilik testi degil sayim. */
+  var sig={};
+  expenses.forEach(function(e){
+    var n=jevNorm(e.note||"");
+    if(!n||n.length<4)return;
+    var amt=Math.round(+e.amount||0);
+    if(amt<=0)return;
+    var key=n+"|"+amt;
+    if(!sig[key]){
+      sig[key]={months:{},cat:e.category,note:String(s_textSafe(e.note)).slice(0,60),amount:amt,count:0,lastDay:""};
+    }
+    var mkx=String(e.date||"").slice(0,7);
+    if(/^\d{4}-\d{2}$/.test(mkx))sig[key].months[mkx]=1;
+    sig[key].count++;
+    var dk=String(e.date||"").slice(0,10);
+    if(dk>sig[key].lastDay)sig[key].lastDay=dk;
+  });
+  Object.keys(sig).forEach(function(k){
+    var s=sig[k];
+    var months=Object.keys(s.months).length;
+    if(months>=3&&s.cat){
+      out.push(jevAnomaly("silent_recurring",(months>=5?"high":"info"),s.cat,months,Math.pow(0.5,months-2),{
+        note:s.note,
+        amount:s.amount,
+        months:months,
+        dayKey:s.lastDay
+      }));
+    }
+  });
+
+  /* Onem sirasi: high -> warn -> info, sonra skor; ayni tur+kategori teke iner */
+  var rank={high:0,warn:1,info:2};
+  out.sort(function(a,b){
+    var r=(rank[a.severity]||9)-(rank[b.severity]||9);
+    if(r!==0)return r;
+    return b.score-a.score;
+  });
+  var seen={},uniq=[];
+  out.forEach(function(a){
+    var key=a.kind+"|"+a.categoryId;
+    if(seen[key])return;
+    seen[key]=true;
+    uniq.push(a);
+  });
+  return uniq.slice(0,JEV_CONFIG.maxAnomalies);
+}
+
+/* Anomali metni: yapisal veri -> yerellestirilmis baslik/detay/durum.
+   Karar metni DEGIL, saf kod; DeepSeek metnini bu katman uretmez. */
+function jevAnomalyText(a,catLabel,lang){
+  var tr=(lang==="tr"),d=(a&&a.data)||{};
+  var out={icon:"⚠️",title:"",detail:"",color:"var(--amber)"};
+  if(!a)return out;
+  var cv=function(v){return fmt(v,{sym:"₺",loc:tr?"tr-TR":"en-US"})};
+  switch(a.kind){
+    case "cat_daily_spike":
+      out.icon="📈";
+      out.title=tr?catLabel+" bugun alisilmadik sekilde yuksek":"Unusually high "+catLabel+" spend today";
+      out.detail=tr?(cv(d.today)+" — tipik gunluk "+cv(d.typical)+" (z="+a.score+")"):(cv(d.today)+" vs typical "+cv(d.typical)+" (z="+a.score+")");
+      out.color="var(--red)";
+      break;
+    case "freq_spike":
+      out.icon="🔁";
+      out.title=tr?catLabel+" icin islem sikligi artti":"Transaction frequency up for "+catLabel;
+      out.detail=tr?(d.todayCount+" islem bugun; beklenen "+d.expected+"/gun (p="+a.pValue+")"):(d.todayCount+" today; expected "+d.expected+"/day (p="+a.pValue+")");
+      break;
+    case "budget_projection":
+      out.icon="🚨";
+      out.title=tr?catLabel+" butcesi asilacak gibi":" "+catLabel+" budget looks set to break";
+      out.detail=tr?("Ay sonu tahmini "+cv(d.projected)+" / butce "+cv(d.budget)+" — olasilik %"+Math.round((d.breachProbability||0)*100)):("Projected "+cv(d.projected)+" vs budget "+cv(d.budget)+" — probability "+Math.round((d.breachProbability||0)*100)+"%");
+      out.color="var(--red)";
+      break;
+    case "overspend_rate":
+      out.icon="📊";
+      out.title=tr?catLabel+" gunluk ortalamanin sikca uzerinde":" "+catLabel+" frequently above daily average";
+      out.detail=tr?("Son "+d.daysChecked+" gunun "+d.daysOver+" tanesi limitin uzerinde (ust sinir %"+Math.round((d.upperRate||0)*100)+")"):(" "+d.daysOver+" of last "+d.daysChecked+" days over the cap (upper bound "+Math.round((d.upperRate||0)*100)+"%)");
+      break;
+    case "mom_shift":
+      out.icon="📅";
+      out.title=tr?catLabel+" gecen aya gore artti":" "+catLabel+" up versus last month";
+      out.detail=tr?("Gunluk ort. "+cv(d.thisMonthDailyAvg)+" (gecen ay "+cv(d.lastMonthDailyAvg)+", p="+a.pValue+")"):("Daily avg "+cv(d.thisMonthDailyAvg)+" (last month "+cv(d.lastMonthDailyAvg)+", p="+a.pValue+")");
+      break;
+    case "amount_outlier":
+      out.icon="💥";
+      out.title=tr?"Alisilmadik buyuk tutar":"Unusually large amount";
+      out.detail=tr?((d.note?("\""+d.note+"\" "):"")+catLabel+" • "+cv(d.amount)+" (tipik "+cv(d.typical)+")"):((d.note?("\""+d.note+"\" "):"")+catLabel+" • "+cv(d.amount)+" (typical "+cv(d.typical)+")");
+      out.color="var(--red)";
+      break;
+    case "silent_recurring":
+      out.icon="🕵️";
+      out.title=tr?"Sessiz tekrarlayan odeme":"Silent recurring payment";
+      out.detail=tr?("\""+d.note+"\" "+cv(d.amount)+" • "+d.months+" aydir tekrar ediyor, kayitli degil"):("\""+d.note+"\" "+cv(d.amount)+" • recurring for "+d.months+" months, not registered");
+      break;
+    default:
+      out.title=tr?"Beklenmedik harcama deseni":"Unexpected spending pattern";
+      out.detail=tr?"Jev arka plan taramasi bir sapma buldu.":"The Jev background scan found a deviation.";
+  }
+  if(a.severity==="info")out.color="var(--blue2)";
+  return out;
+}
+
+/* Anomali -> DeepSeek (System 2) devir istemi.
+   Rozete tiklayinca DeepSeek sohbeti bu baglamla acilir. */
+function jevAnomalyToPrompt(a,catLabel,lang){
+  var tr=(lang==="tr"),d=(a&&a.data)||{};
+  if(!a)return "";
+  var head=tr?"Jev arka plan taramasi su anormalligi buldu. Nedenini ve ne yapmam gerektigini kisaca acikla.":"The Jev background scan found this anomaly. Briefly explain why and what I should do.";
+  var lines=[head,"","kind: "+a.kind,"severity: "+a.severity,"category: "+catLabel,"score: "+a.score,"p_value: "+a.pValue];
+  Object.keys(d).forEach(function(k){lines.push(k+": "+d[k])});
+  return lines.join("\n");
+}
+
+/* ============================================================
+   KENDI KENDINI TEST — ?testjev=1 ile calisir, ayrica jsdom
+   testlerinden cagrilir. Ag GEREKTIRMEZ (yerel cekirdegi sinar).
+   ============================================================ */
+function jevSelfTest(lang){
+  lang=lang||"tr";
+  var r=[];
+  function t(name,cond,extra){r.push({name:name,pass:!!cond,extra:(extra===undefined?"":String(extra))})}
+
+  /* 1) Guvenli ayristirma */
+  t("jevParseLoose: ```json sarmali",(function(){var o=jevParseLoose('```json\n{"a":1}\n```');return o&&o.a===1})());
+  t("jevParseLoose: metin icinde JSON",(function(){var o=jevParseLoose('sonuc: {"a":2} bitti');return o&&o.a===2})());
+  t("jevParseLoose: bozuk metin -> null",jevParseLoose("{bu json degil")===null);
+  t("jevParseLoose: bos -> null",jevParseLoose("")===null);
+
+  /* 2) Tipli dogrulama: kume disi secim / NaN olasilik reddedilmeli */
+  var asked={q:{type:"choice",criteria:{a:"",b:""}}};
+  t("tip: kume disi secim gecersiz",
+    jevNormalizeAnswers({answers:{q:{type:"choice",choice:"z",confidence:1,probabilities:{a:1,b:0}}}},asked).invalid.length===1);
+  t("tip: NaN olasilik gecersiz",
+    jevNormalizeAnswers({answers:{q:{type:"choice",choice:"a",confidence:1,probabilities:{a:"abc",b:0}}}},asked).invalid.length===1);
+  var good=jevNormalizeAnswers({answers:{q:{type:"choice",choice:"a",confidence:0.9,probabilities:{a:0.9,b:0.1}}}},asked);
+  t("tip: gecerli cevap kabul",good.invalid.length===0&&good.answers.q.choice==="a");
+  t("tip: noul aralik disi reddedildi",
+    jevNormalizeAnswers({answers:{n:{type:"noul",noul:3}}},{n:{type:"noul"}}).invalid.length===1);
+
+  /* 3) Guven formulu TypeSafe'in yayinladigi degerlerle ortusuyor mu? */
+  var sm=jevSoftmax({a:Math.log(0.85),b:Math.log(0.15)});
+  t("guven formulu ~0.78",Math.abs(sm.confidence-0.78)<0.02,sm.confidence.toFixed(3));
+  var sm2=jevSoftmax({a:Math.log(0.56),b:Math.log(0.44)});
+  t("belirsizlikte guven ~0.33",Math.abs(sm2.confidence-0.33)<0.02,sm2.confidence.toFixed(3));
+  var sm3=jevSoftmax({a:Math.log(1),b:-Infinity});
+  t("tek secenek -> guven 1.0",Math.abs(sm3.confidence-1)<0.001,sm3.confidence.toFixed(3));
+  t("skorlayici yoksa abstain",jevAskLocal({},{x:{type:"noul"}},{},lang).answers.x.abstain===true);
+
+  /* 4) MODUL 1 — butce asimi */
+  var g1=jevRiskGateSync({amount:300,budget:1000,spent:900,catLabel:"Market",dayOfMonth:15,daysInMonth:30,monthIncome:20000},lang);
+  t("kapi: asim tespit",g1.isAllowed===false&&g1.riskLevel==="breach","lvl="+g1.riskLevel);
+  t("kapi: eksik tutar koddan",Math.abs(g1.deficitAmount-200)<0.01,g1.deficitAmount);
+  var g2=jevRiskGateSync({amount:100,budget:1000,spent:100,catLabel:"Market",dayOfMonth:5,daysInMonth:30},lang);
+  t("kapi: uygun harcama izinli",g2.isAllowed===true&&g2.riskLevel==="safe",g2.riskLevel);
+  var g3=jevRiskGateSync({amount:5000,catLabel:"Market",dayOfMonth:5,daysInMonth:30,monthIncome:20000},lang);
+  t("kapi: butce yoksa blok yok",g3.isAllowed===true,"lvl="+g3.riskLevel);
+  t("kapi: butce yok sebebi",g3.reasons.indexOf("no_budget")!==-1);
+  var g4=jevRiskGateSync({amount:500,budget:1000,spent:950,catLabel:"Kira",note:"aidat taksit",dayOfMonth:20,daysInMonth:30},lang);
+  t("kapi: tekrarlayan uyarisi",g4.reasons.indexOf("likely_recurring")!==-1,g4.repeatRisk);
+
+  /* 5) MODUL 2 — kategorizasyon */
+  var dem=DC.map(function(c){return Object.assign({},c)});
+  var c1=jevCategorizeLocal("Migros market alisverisi 350 TL",dem,null,lang);
+  t("kategori: Migros -> market",c1.category==="market",c1.category);
+  t("kategori: tutar cikarildi",c1.amount===350,c1.amount);
+  var c2=jevCategorizeLocal("Netflix abonelik odemesi 149,99 TL",dem,null,lang);
+  t("kategori: Netflix -> abonelik",c2.category==="abonelik",c2.category);
+  var c3=jevCategorizeLocal("Istanbulkart yukleme 200 TL",dem,null,lang);
+  t("kategori: Istanbulkart -> ulasim",c3.category==="ulasim",c3.category);
+  var c4=jevCategorizeLocal("Trendyol'dan kulaklik aldik, 1200 TL",dem,null,lang);
+  t("kategori: kullanici ornegi tutar",c4.amount===1200,c4.amount);
+  t("kategori: kullanici ornegi kategori var",!!c4.category,c4.category);
+  t("kategori: alternatifler tipli",Array.isArray(c4.alternatives)&&c4.alternatives.length>0);
+  var c5=jevCategorizeLocal("merhaba nasilsin bugun hava guzel",dem,null,lang);
+  t("kategori: harcama degil -> manuel",c5.requiresManualReview===true&&c5.category===null);
+  t("kategori: not alani temiz",c1.note.indexOf("350")===-1,c1.note);
+
+  /* 6) MODUL 3 — olasilik testleri */
+  t("poisson: P(X>=0)=1",Math.abs(jevPoissonTailGe(0,2)-1)<1e-9);
+  t("poisson: kuyruk azaliyor",jevPoissonTailGe(5,1)<jevPoissonTailGe(3,1));
+  t("poisson: k=10, lambda=1 cok kucuk",jevPoissonTailGe(10,1)<1e-6,jevPoissonTailGe(10,1));
+  t("wilson: ust sinir > oran",jevWilsonUpper(3,10,1.645)>0.3);
+  t("welch: ayni seri -> p~1",(function(){var w=jevWelch([1,2,3,4,5],[1,2,3,4,5]);return w&&w.p>0.9})());
+  t("welch: farkli seri -> p<0.05",(function(){var w=jevWelch([10,11,12,13,14],[1,2,1,2,1]);return w&&w.p<0.05})());
+  t("modified z: aykiri deger",jevModifiedZ([10,10,10,10,10,10,10,10,10,10,100],100)>3.5);
+  t("normSf: 0 -> 0.5",Math.abs(jevNormSf(0)-0.5)<1e-6);
+  t("normSf: 1.645 -> ~0.05",Math.abs(jevNormSf(1.645)-0.05)<0.002,jevNormSf(1.645).toFixed(4));
+
+  /* 7) Tarama: bos/az veri ile guvenli (throw yok) */
+  var scanEmpty=jevScanAnomalies({expenses:[],categories:dem,budgets:{}},lang,"2026-09-22");
+  t("tarama: bos veri -> bos liste",Array.isArray(scanEmpty)&&scanEmpty.length===0);
+  var demo=null;
+  try{demo=sampleDemo()}catch(e){}
+  var scanDemo=[];
+  try{
+    var firstKey=(demo&&demo.expenses&&demo.expenses[0])?String(demo.expenses[0].date).slice(0,10):"2026-09-22";
+    scanDemo=jevScanAnomalies({expenses:(demo&&demo.expenses)||[],categories:(demo&&demo.categories)||dem,budgets:(demo&&demo.budgets)||{}},lang,firstKey);
+  }catch(e){t("tarama: ornek veride hata",false,String(e))}
+  t("tarama: ornek veri tipli liste",Array.isArray(scanDemo));
+  if(scanDemo.length){
+    var a0=scanDemo[0];
+    t("tarama: kayit tipli",!!(a0.kind&&a0.severity&&typeof a0.pValue==="number"&&a0.data));
+    t("tarama: metin uretilebilir",!!jevAnomalyText(a0,"Market",lang).title);
+  }else{
+    t("tarama: ornek veri anomalisi yok (kabul)",true);
+  }
+
+  /* 8) DeepSeek devir istemi */
+  var prompt=jevAnomalyToPrompt({kind:"budget_projection",severity:"warn",score:0.9,pValue:0.1,data:{budget:1000,projected:1400}},"Market",lang);
+  t("devir istemi baglam iceriyor",prompt.indexOf("budget_projection")!==-1&&prompt.indexOf("projected")!==-1);
+
+  /* 9) Saglayici (OpenRouter / TypeSafe) cozumleme */
+  t("saglayici: openrouter endpoint",JEV_PROVIDERS.openrouter.endpoint==="https://openrouter.ai/api/v1/systemone");
+  t("saglayici: openrouter model slug",JEV_PROVIDERS.openrouter.model==="typesafe/jev-latest");
+  t("saglayici: typesafe endpoint",JEV_PROVIDERS.typesafe.endpoint==="https://api.typesafe.ai/v1/systemone");
+  var prevProv=JEV_CONFIG.provider;
+  jevSetProvider("openrouter");
+  t("saglayici: openrouter secilince endpoint",jevEndpoint()==="https://openrouter.ai/api/v1/systemone",jevEndpoint());
+  t("saglayici: openrouter secilince model",jevModelId()==="typesafe/jev-latest",jevModelId());
+  jevSetProvider("typesafe");
+  t("saglayici: typesafe secilince endpoint",jevEndpoint()==="https://api.typesafe.ai/v1/systemone",jevEndpoint());
+  t("saglayici: typesafe secilince model",jevModelId()==="jev-latest",jevModelId());
+  t("saglayici: bilinmeyen id yok sayilir",(function(){jevSetProvider("yok");return jevProvider()==="typesafe"})());
+  jevSetProvider(prevProv);
+  t("saglayici: geri yuklendi",jevEndpoint()===JEV_PROVIDERS[jevProvider()].endpoint);
+
+  return r;
+}
+
+/* Ayar ekranindaki "Test" dugmesi: gercek Jev cagrisi yapip
+   gidis-donus suresini ve tipli yanitlari raporlar. */
+async function jevTestRemote(lang){
+  var tr=(lang==="tr");
+  if(!JEV_CONFIG.apiKey)return {ok:false,latencyMs:0,message:(tr?"Once bir Jev anahtari gir.":"Enter a Jev key first.")};
+  var t0=jevNow();
+  var res=await jevAskRemote(
+    {domain:"health_check",app:"Para Kontrol",purpose:"connectivity check"},
+    {
+      alive:{type:"noul",instructions:(tr?"Bu bir sistem saglik kontrolu; yanit verilebilir":"This is a system health check; a response is possible")},
+      domain:{type:"choice",instructions:(tr?"Metin hangi alana ait?":"Which domain is this text about?"),criteria:{finance:(tr?"Finans/para":"Finance/money"),other:(tr?"Diger":"Other")}}
+    },
+    lang
+  );
+  var ms=jevMs(t0);
+  if(!res.ok){
+    return {ok:false,latencyMs:ms,provider:jevProvider(),model:jevModelId(),code:(res.error&&res.error.code)||"error",
+            message:(res.error&&res.error.message)||(tr?"Bilinmeyen hata":"Unknown error")};
+  }
+  return {ok:true,latencyMs:ms,provider:jevProvider(),model:res.model,transport:JEV_CONFIG.transport,
+          answers:Object.keys(res.answers),
+          alive:(res.answers.alive?res.answers.alive.noul:null),
+          domain:(res.answers.domain?res.answers.domain.choice:null),
+          message:(tr?("Jev yanit verdi ("+ms+" ms)."):("Jev responded ("+ms+" ms)."))};
+}
+
 
 /* ============================================================ */
 
@@ -785,7 +2378,7 @@ function tdy(){
 function dueDateForMonth(y,m,day){var maxDay=new Date(y,m+1,0).getDate();var due=Math.min(maxDay,Math.max(1,parseInt(day,10)||1));return y+"-"+String(m+1).padStart(2,"0")+"-"+String(due).padStart(2,"0")}
 function dueDateForMonthKey(mk,day){var p=mk.split("-");return dueDateForMonth(+p[0],+p[1]-1,day)}
 function prd(s){var p=s.split("-");return{y:+p[0],m:+p[1]-1,d:+p[2]}}
-function ini(){var _l=localStorage.getItem("pk_lang")||"tr";var _dc=_l==="tr"?DC:DC_EN;var _t=T[_l]||T.tr;return{expenses:[],incomes:{},incomeEntries:[],debts:[{id:"kart",label:_t.debt_default1,icon:"💳",total:0,paid:0,payments:[]},{id:"kredi",label:_t.debt_default2,icon:"🏦",total:0,paid:0,payments:[]}],budgets:{},categories:_dc.map(function(c){return Object.assign({},c)}),templates:[],recurring:[],savings:{goal:0,label:_t.savings_label},budgetProfiles:[]}}
+function ini(){var _l=localStorage.getItem("pk_lang")||"tr";var _dc=_l==="tr"?DC:DC_EN;var _t=T[_l]||T.tr;return{expenses:[],incomes:{},incomeEntries:[],debts:[{id:"kart",label:_t.debt_default1,icon:"💳",total:0,paid:0,payments:[]},{id:"kredi",label:_t.debt_default2,icon:"🏦",total:0,paid:0,payments:[]}],budgets:{},categories:_dc.map(function(c){return Object.assign({},c)}),templates:[],recurring:[],savings:{goal:0,label:_t.savings_label},budgetProfiles:[],jevAnomalies:[],jevMeta:{scanTs:0,seen:[]}}}
 function ld(){try{var d=localStorage.getItem(KY);return d?JSON.parse(d):sampleDemo()}catch(e){return sampleDemo()}}
 function sv(d){try{localStorage.setItem(KY,JSON.stringify(d))}catch(e){}}
 
@@ -833,9 +2426,11 @@ function drivePost(action,extra){
    ============================================================ */
 var DRIVE_MAX={
   expenses:20000,incomeEntries:5000,debts:50,payments:2000,categories:200,
-  templates:200,recurring:200,budgetProfiles:50,aiNotes:20,aiList:8,
+  templates:200,recurring:200,budgetProfiles:50,aiNotes:20,aiList:8,jevAnomalies:12,
   noteLen:200,labelLen:60,textLen:600,monthKeyLen:7,maxAmount:1e9
 };
+var JEV_SEVERITIES={high:1,warn:1,info:1};
+var JEV_KINDS={cat_daily_spike:1,freq_spike:1,budget_projection:1,overspend_rate:1,mom_shift:1,amount_outlier:1,silent_recurring:1};
 function sStr(v,max){
   if(v===null||typeof v==="undefined")return "";
   return String(v).slice(0,max);
@@ -1034,6 +2629,51 @@ function sanitizeRemote(raw){
     });
   }
   out.aiNotes=notes;
+
+  /* --- Jev anomali kayitlari (tipli, beyaz liste) --- */
+  var jAn=[];
+  if(Array.isArray(raw.jevAnomalies)){
+    raw.jevAnomalies.slice(0,DRIVE_MAX.jevAnomalies).forEach(function(ra,ix){
+      if(!ra||typeof ra!=="object"){dropped++;return}
+      var kind=String(ra.kind||"");
+      var sev=String(ra.severity||"");
+      if(!JEV_KINDS[kind]||!JEV_SEVERITIES[sev]){dropped++;return}
+      var data={};
+      if(ra.data&&typeof ra.data==="object"&&!Array.isArray(ra.data)){
+        Object.keys(ra.data).slice(0,12).forEach(function(dk){
+          var dv=ra.data[dk];
+          var kk=String(dk).slice(0,32);
+          if(typeof dv==="number"){if(isFinite(dv))data[kk]=dv;return}
+          if(typeof dv==="string"){data[kk]=sText(dv,120);return}
+          if(typeof dv==="boolean"){data[kk]=dv}
+        });
+      }
+      var score=sNum(ra.score,0,1e6);
+      var pv=sNum(ra.pValue,0,1);
+      var ts=sNum(ra.ts,0,4102444800000);
+      jAn.push({
+        id:sId(ra.id)||(kind+"|"+ix),
+        kind:kind,
+        severity:sev,
+        categoryId:catOk(ra.categoryId),
+        score:(score===null?0:score),
+        pValue:(pv===null?0:pv),
+        data:data,
+        ts:(ts===null?Date.now():ts)
+      });
+      kept++;
+    });
+  }
+  out.jevAnomalies=jAn;
+  var jSeen=[];
+  if(raw.jevMeta&&typeof raw.jevMeta==="object"&&Array.isArray(raw.jevMeta.seen)){
+    raw.jevMeta.seen.slice(0,DRIVE_MAX.jevAnomalies).forEach(function(sv){
+      var s=sId(sv);
+      if(s)jSeen.push(s);
+    });
+  }
+  var jScan=(raw.jevMeta&&sNum(raw.jevMeta.scanTs,0,4102444800000))||0;
+  out.jevMeta={scanTs:jScan,seen:jSeen};
 
   return {state:out,dropped:dropped,kept:kept};
 }
@@ -1571,6 +3211,22 @@ function App(){
   var _aiAskConv=h([]),aiAskConv=_aiAskConv[0],setAiAskConv=_aiAskConv[1];
   var _aiPreModal=h(false),aiPreModal=_aiPreModal[0],setAiPreModal=_aiPreModal[1];
   var _aiPreVerdict=h(null),aiPreVerdict=_aiPreVerdict[0],setAiPreVerdict=_aiPreVerdict[1];
+
+  /* ==== Jev (System One) state'leri ==== */
+  var _jevKeyDraft=h(""),jevKeyDraft=_jevKeyDraft[0],setJevKeyDraft=_jevKeyDraft[1];
+  var _jevKeySaved=h(function(){return !!JEV_CONFIG.apiKey}),jevKeySaved=_jevKeySaved[0],setJevKeySaved=_jevKeySaved[1];
+  var _jevKeyMode=h(JEV_CONFIG.keyMode||"device"),jevKeyMode=_jevKeyMode[0],setJevKeyMode=_jevKeyMode[1];
+  var _jevEngineMode=h(JEV_CONFIG.engine||"auto"),jevEngineMode=_jevEngineMode[0],setJevEngineMode=_jevEngineMode[1];
+  var _jevTransport=h(JEV_CONFIG.transport||"direct"),jevTransport=_jevTransport[0],setJevTransport=_jevTransport[1];
+  var _jevGate=h(null),jevGate=_jevGate[0],setJevGate=_jevGate[1];
+  var _jevSuggest=h(null),jevSuggest=_jevSuggest[0],setJevSuggest=_jevSuggest[1];
+  var _jevFillMsg=h(""),jevFillMsg=_jevFillMsg[0],setJevFillMsg=_jevFillMsg[1];
+  var _jevNotice=h(""),jevNotice=_jevNotice[0],setJevNotice=_jevNotice[1];
+  var _jevTesting=h(false),jevTesting=_jevTesting[0],setJevTesting=_jevTesting[1];
+  var _jevOpen=h(false),jevOpen=_jevOpen[0],setJevOpen=_jevOpen[1];
+  var jevScanTsRef=ur(0);
+  var jevSuggestTimerRef=ur(null);
+  var jevGateReqRef=ur(0);
 
   /* Mobil klavye yüksekliği — visualViewport ile */
   var _kbHeight=h(0),kbHeight=_kbHeight[0],setKbHeight=_kbHeight[1];
@@ -2250,6 +3906,442 @@ function App(){
     return cats.some(function(c){var sp=cTo[c.id]||0;var b=S.budgets[c.id]||0;return b>0&&sp>=b*0.8});
   },[cats,cTo,S.budgets]);
 
+  /* ============================================================
+     JEV (SYSTEM ONE) — UC MODULUN UYGULAMA BAGLANTISI
+     Modul 1: Anlik harcama risk kapisi  -> jevGateVerdict (render icinde, 0 ms)
+     Modul 2: Akilli kategorizasyon      -> jevSuggest (render icinde, 0 ms)
+     Modul 3: Arka plan anomali taramasi -> jevAnomalies + rozet + DeepSeek devri
+     ============================================================ */
+
+  /* Kullanicinin kendi gecmisi: kategori onceliği + token eslesmesi (kisisel prior) */
+  var jevHist=um(function(){return jevHistoryStats(S.expenses||[],cats)},[S.expenses,cats]);
+
+  function jevMonthTotals(mk){
+    var exp=(S.expenses||[]).reduce(function(s,e){
+      return (e.date&&String(e.date).slice(0,7)===mk)?s+(+e.amount||0):s;
+    },0);
+    var incE=(S.incomeEntries||[]).filter(function(e){return e.monthKey===mk});
+    var inc=incE.length>0?incE.reduce(function(s,e){return s+(+e.amount||0)},0):((S.incomes&&S.incomes[mk])||0);
+    return {expense:exp,income:inc};
+  }
+  /* Harcamanin eklenecegi ay (dt) uzerinden kategori harcamasi */
+  function jevCatSpentIn(mk,catId,excludeLast){
+    var list=S.expenses||[];
+    var n=excludeLast?list.length-1:list.length;
+    var s=0;
+    for(var i=0;i<n;i++){
+      var e=list[i];
+      if(e&&e.category===catId&&e.date&&String(e.date).slice(0,7)===mk)s+=(+e.amount||0);
+    }
+    return s;
+  }
+  function jevPrevMonthKey(mk){
+    var p=String(mk).split("-");
+    var d=new Date(+p[0],+p[1]-2,1);
+    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+  }
+  function jevGateInput(){
+    var a=parseNum(amt);
+    if(!a||a<=0)return null;
+    var mk=(dt||tdy()).slice(0,7);
+    var p=prd(dt||tdy());
+    var cobj=fc(cat);
+    var tot=jevMonthTotals(mk);
+    return {
+      amount:a,
+      categoryId:cat,
+      catLabel:(cobj&&cobj.label)?cobj.label:cat,
+      budget:(S.budgets&&S.budgets[cat])||0,
+      spent:jevCatSpentIn(mk,cat,false),
+      prevMonthSpent:jevCatSpentIn(jevPrevMonthKey(mk),cat,false),
+      monthIncome:tot.income,
+      monthExpense:tot.expense,
+      dayOfMonth:p.d,
+      daysInMonth:new Date(p.y,p.m+1,0).getDate(),
+      note:note||""
+    };
+  }
+
+  /* MODUL 1 — anlik karar. Render icinde hesaplanir: tiklama/ag beklemesi YOK. */
+  var jevGateLocal=um(function(){
+    var input=jevGateInput();
+    if(!input)return null;
+    return jevRiskGateSync(input,lang);
+  },[amt,cat,note,dt,S.expenses,S.budgets,lang]);
+  var jevGateSig=um(function(){return [amt,cat,note,dt,(S.expenses||[]).length,(S.budgets&&S.budgets[cat])||0].join("|")},[amt,cat,note,dt,S.expenses,S.budgets]);
+  /* Jev API'si daha iyi bir yargi verirse karar yukseltilir (asagidaki effect) */
+  var jevGateVerdict=(jevGate&&jevGate.sig===jevGateSig)?jevGate.verdict:jevGateLocal;
+
+  /* MODUL 2 — aninda kategori onerisi (agsiz yerel cekirdek) */
+  var jevSuggestLocal=um(function(){
+    var txt=(note||"").trim();
+    if(txt.length<4)return null;
+    return jevCategorizeLocal(txt,cats,jevHist,lang);
+  },[note,cats,jevHist,lang]);
+
+  /* MODUL 3 — onaylanmamis (gorulmemis) anomaliler */
+  var jevAnomalies=um(function(){
+    var raw=(S.jevAnomalies||[]).filter(function(a){return a&&JEV_KINDS[a.kind]});
+    var seen=(S.jevMeta&&S.jevMeta.seen)||[];
+    return raw.filter(function(a){return seen.indexOf(a.id)===-1});
+  },[S.jevAnomalies,S.jevMeta]);
+  var jevHighCount=um(function(){
+    return jevAnomalies.filter(function(a){return a.severity==="high"}).length;
+  },[jevAnomalies]);
+
+  /* --- Modul 2: oneriyi forma uygula (kullanici onaylar) --- */
+  function applyJevSuggestion(sug){
+    if(!sug)return;
+    if(sug.amount!=null&&sug.amount>0)setAmt(String(sug.amount));
+    if(sug.category)setCat(sug.category);
+    if(sug.note)setNote(sug.note);
+    var cobj=sug.category?fc(sug.category):null;
+    setJevFillMsg((lang==="tr"?"Dolduruldu: ":"Filled: ")+((cobj&&cobj.icon)?cobj.icon+" ":"")+
+      ((cobj&&cobj.label)||(lang==="tr"?"kategori secilemedi":"no category"))+
+      " • "+Math.round((sug.confidence||0)*100)+"%");
+    setTimeout(function(){setJevFillMsg("")},3500);
+    try{navigator.vibrate&&navigator.vibrate(12)}catch(e){}
+  }
+  /* --- Modul 2: Jev API'si ile yeniden dene (daha emin karar icin) --- */
+  async function refineJevSuggestion(txt){
+    txt=String(txt||"").trim();
+    if(txt.length<4)return;
+    var sug=await jevCategorize(txt,cats,jevHist,lang);
+    if(sug&&sug.category)setJevSuggest(sug);
+    return sug;
+  }
+
+  /* --- Modul 3: tarama + rozet + DeepSeek devri --- */
+  function jevScanNow(silent){
+    var found=jevScanAnomalies({expenses:S.expenses||[],categories:cats,budgets:S.budgets||{}},lang,tdy());
+    setS(function(p){
+      var meta=Object.assign({},p.jevMeta||{seen:[]},{scanTs:Date.now()});
+      return Object.assign({},p,{jevAnomalies:found,jevMeta:meta});
+    });
+    if(!silent)setJevNotice(lang==="tr"?(found.length+" anomali bulundu."):(found.length+" anomalies found."));
+    return found;
+  }
+  function dismissJevAnomaly(a){
+    if(!a)return;
+    setS(function(p){
+      var meta=Object.assign({seen:[]},p.jevMeta||{});
+      var seen=(meta.seen||[]).slice();
+      if(seen.indexOf(a.id)===-1)seen.push(a.id);
+      meta.seen=seen.slice(-60);
+      return Object.assign({},p,{jevMeta:meta});
+    });
+  }
+  function clearJevAnomalies(){
+    setS(function(p){return Object.assign({},p,{jevAnomalies:[],jevMeta:Object.assign({seen:[]},p.jevMeta||{},{seen:[]})})});
+  }
+  /* Rozete tiklaninca: DeepSeek (System 2) sohbeti acilir ve baglamla sorulur */
+  function askDeepSeekAboutAnomaly(a){
+    if(!a)return;
+    var cobj=fc(a.categoryId);
+    var label=(cobj&&cobj.label)?cobj.label:a.categoryId;
+    var q=jevAnomalyToPrompt(a,label,lang);
+    setAiErr("");
+    setAiAskConv([]);
+    setAiAskModal(true);
+    askAiQuestion(q);
+  }
+
+  /* --- Ayar ekrani: anahtar kaydet / sil / motor degistir / test --- */
+  function jevSaveKey(){
+    var v=(jevKeyDraft||"").trim();
+    if(!v)return;
+    if(!jevKeyStore(v,jevKeyMode)){setJevNotice(lang==="tr"?"Anahtar saklanamadi (tarayici depolamayi engelliyor).":"Could not store the key (browser storage blocked).");return}
+    JEV_CONFIG.apiKey=v;
+    JEV_CONFIG.keyMode=jevKeyMode;
+    setJevKeySaved(true);
+    setJevKeyDraft("");
+    setJevNotice(lang==="tr"?"Anahtar kaydedildi.":"Key saved.");
+  }
+  function jevRemoveKey(){
+    jevKeyStore("",jevKeyMode);
+    JEV_CONFIG.apiKey="";
+    setJevKeySaved(false);
+    setJevNotice(lang==="tr"?"Anahtar silindi. Yerel System One cekirdegi kullaniliyor.":"Key removed. Using the local System One core.");
+  }
+  function jevSetEngineMode(m){
+    JEV_CONFIG.engine=m;
+    setJevEngineMode(m);
+    try{localStorage.setItem(JEV_MODE_KEY,m)}catch(e){}
+    setJevNotice(lang==="tr"?"Motor: "+m:"Engine: "+m);
+  }
+  function jevSetTransport(tr2){
+    JEV_CONFIG.transport=tr2;
+    setJevTransport(tr2);
+    try{localStorage.setItem(JEV_TRANSPORT_KEY,tr2)}catch(e){}
+    setJevNotice(lang==="tr"?"Tasima: "+tr2:"Transport: "+tr2);
+  }
+  async function jevRunTest(){
+    if(jevTesting)return;
+    setJevTesting(true);
+    setJevNotice(lang==="tr"?"Test ediliyor…":"Testing…");
+    try{
+      var r=await jevTestRemote(lang);
+      setJevNotice(r.message+(r.ok?((lang==="tr"?" • model: ":" • model: ")+String(r.model||"-")+(lang==="tr"?" • yanitlar: ":" • answers: ")+String((r.answers||[]).join(","))):""));
+    }catch(e){
+      setJevNotice(String((e&&e.message)||e));
+    }finally{
+      setJevTesting(false);
+    }
+  }
+
+  /* ============================================================
+     JEV EFFECT'LERI
+     ============================================================ */
+
+  /* (A) MODUL 3 — ARKA PLAN WATCHER.
+     Veri degistikce (harcama/butce/kategori) bos zamanda tarar.
+     Ucuzdur (~1 ms) ama gereksiz yazmayi onlemek icin:
+     - taramalar arasi en az JEV_CONFIG.scanMinGapMs
+     - sonuc ayni ise store'a YAZILMAZ
+     Demo veride calismaz (ilk kullanimda kafa karistirmasin). */
+  ef(function(){
+    if(S._demo)return;
+    var idleId=null,tid=null;
+    var run=function(){
+      if(Date.now()-(jevScanTsRef.current||0)<JEV_CONFIG.scanMinGapMs)return;
+      jevScanTsRef.current=Date.now();
+      var found=jevScanAnomalies({expenses:S.expenses||[],categories:cats,budgets:S.budgets||{}},lang,tdy());
+      var sig=function(l){return (l||[]).map(function(a){return a.id+":"+a.score}).sort().join(",")};
+      if(sig(found)===sig(S.jevAnomalies))return;
+      setS(function(p){
+        var meta=Object.assign({seen:[]},p.jevMeta||{},{scanTs:Date.now()});
+        return Object.assign({},p,{jevAnomalies:found,jevMeta:meta});
+      });
+    };
+    try{
+      if(typeof window!=="undefined"&&typeof window.requestIdleCallback==="function"){
+        idleId=window.requestIdleCallback(run,{timeout:1500});
+        return function(){try{if(idleId)window.cancelIdleCallback(idleId)}catch(e){}};
+      }
+    }catch(e){}
+    tid=setTimeout(run,300);
+    return function(){if(tid)clearTimeout(tid)};
+  },[S.expenses,S.budgets,S.categories,lang]);
+
+  /* (B) MODUL 1 — Jev API'siyle karar YUKSELTME.
+     Yerel karar zaten aninda ekranda; bu effect yalnizca uzak motor
+     acikken 350 ms sonra gercek Jev yargisini alip karari gunceller. */
+  ef(function(){
+    if(jevEngine()!=="typesafe")return;
+    var sig=jevGateSig;
+    var cancelled=false;
+    var tid=setTimeout(function(){
+      if(cancelled)return;
+      var input=jevGateInput();
+      if(!input)return;
+      jevRiskGate(input,lang,null,function(verdict){
+        if(cancelled)return;
+        setJevGate({sig:sig,verdict:verdict});
+      });
+    },350);
+    return function(){cancelled=true;if(tid)clearTimeout(tid)};
+  },[jevGateSig,lang]);
+
+  /* (C) MODUL 2 — oneriyi guncelle; uzak motor acikken Jev'e de sor */
+  ef(function(){
+    if(jevSuggestTimerRef.current){clearTimeout(jevSuggestTimerRef.current);jevSuggestTimerRef.current=null}
+    if(!jevSuggestLocal){return}
+    setJevSuggest(jevSuggestLocal);
+    if(jevEngine()!=="typesafe")return;
+    var txt=jevSuggestLocal.text;
+    jevSuggestTimerRef.current=setTimeout(function(){refineJevSuggestion(txt)},700);
+    return function(){if(jevSuggestTimerRef.current){clearTimeout(jevSuggestTimerRef.current);jevSuggestTimerRef.current=null}};
+  },[jevSuggestLocal]);
+
+  /* (D) ?testjev=1 — yerel cekirdek kendi kendini test eder (ag gerekmez) */
+  ef(function(){
+    try{
+      var params=new URLSearchParams(window.location.search);
+      if(params.get("testjev")!=="1")return;
+      var res=jevSelfTest(lang);
+      var pass=res.filter(function(x){return x.pass}).length;
+      var box=document.getElementById("testjev-out");
+      if(!box){
+        box=document.createElement("div");
+        box.id="testjev-out";
+        box.style.cssText="position:fixed;inset:8px;z-index:99999;padding:14px 16px;border-radius:14px;background:rgba(7,9,15,0.96);color:#d1fae5;font:11px/1.6 monospace;white-space:pre-wrap;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,0.5)";
+        document.body.appendChild(box);
+      }
+      box.textContent="JEV SELF-TEST  "+(pass===res.length?"ALL PASS":"FAIL")+"  "+pass+"/"+res.length+"\n\n"+
+        res.map(function(x){return (x.pass?"PASS":"FAIL")+" | "+x.name+(x.extra?("  ["+x.extra+"]"):"")}).join("\n");
+    }catch(e){}
+  },[]);
+
+  /* ============================================================
+     JEV ARAYUZ PARCALARI
+     ============================================================ */
+  /* Sebep kodlarini yerellestirilmis metne cevir (karar koddan geliyor) */
+  function jevReasonLines(v,lang){
+    if(!v)return [];
+    var tr=(lang==="tr"),out=[];
+    var F=function(n){return f(n)};
+    (v.reasons||[]).forEach(function(code){
+      if(code==="over_budget")out.push(tr?("Butceyi "+F(v.deficitAmount)+" asiyor."):("Exceeds the budget by "+F(v.deficitAmount)+"."));
+      else if(code==="near_limit")out.push(tr?("Kategori butcesinin %"+Math.round((v.budgetUsedRatio||0)*100)+"'inde."):("At "+Math.round((v.budgetUsedRatio||0)*100)+"% of the category budget."));
+      else if(code==="projection_over")out.push(tr?("Bu hizla ay sonu "+F(v.projectedMonthEnd)+" olur (butce "+F(v.budget)+")."):("At this pace month-end is "+F(v.projectedMonthEnd)+" (budget "+F(v.budget)+")."));
+      else if(code==="model_veto")out.push(tr?"Jev bu harcamanin butceye sigmadigini dusunuyor.":"Jev judges this does not fit the budget.");
+      else if(code==="likely_recurring")out.push(tr?("Tekrarlayan odeme gibi (%"+Math.round((v.repeatRisk||0)*100)+")."):("Looks recurring ("+Math.round((v.repeatRisk||0)*100)+"%)."));
+      else if(code==="non_essential")out.push(tr?"Zorunlu bir harcama gibi gorunmuyor.":"Does not look like an essential expense.");
+      else if(code==="no_budget")out.push(tr?"Bu kategoride butce tanimli degil; aylik gelire gore bakildi.":"No budget set for this category; judged against monthly income.");
+    });
+    return out.slice(0,3);
+  }
+
+  /* MODUL 1 — ANLIK RISK KAPISI. Render icinde uretilir; DeepSeek beklenmez. */
+  function jevGateUi(){
+    var v=jevGateVerdict;
+    if(!v)return null;
+    var isBad=(v.riskLevel==="breach");
+    var isWarn=(v.riskLevel==="strain"||v.riskLevel==="watch");
+    /* "safe" ve sebep yoksa gurultu yapma */
+    if(!isBad&&!isWarn&&(v.reasons||[]).length===0)return null;
+    var lines=jevReasonLines(v,lang);
+    var col=isBad?"var(--red)":(isWarn?"var(--amber)":"var(--green)");
+    var ttl=isBad?(lang==="tr"?"BUTCENI ASIYOR":"OVER BUDGET")
+            :(isWarn?(lang==="tr"?"BUTCEYI ZORLUYOR":"STRAINING THE BUDGET")
+            :(lang==="tr"?"BUTCE ICINDE":"WITHIN BUDGET"));
+    var srcTag=(v.source==="code")?(lang==="tr"?"yerel kural":"local rule"):"jev";
+    return html`<div style=${{padding:"11px 13px",borderRadius:"var(--radius-sm)",marginBottom:10,background:isBad?"rgba(255,68,102,0.10)":(isWarn?"rgba(245,158,11,0.10)":"rgba(6,255,165,0.06)"),border:"1px solid "+(isBad?"rgba(255,68,102,0.3)":(isWarn?"rgba(245,158,11,0.28)":"rgba(6,255,165,0.22)"))}}>
+      <div style=${{display:"flex",alignItems:"center",gap:7,marginBottom:lines.length?5:0}}>
+        <span style=${{fontSize:14}}>${isBad?"⛔":(isWarn?"⚠️":"✓")}</span>
+        <span style=${{flex:1,fontSize:11,fontWeight:800,color:col,letterSpacing:"0.02em"}}>${ttl}</span>
+        <span style=${{fontSize:8,fontWeight:700,color:"var(--dim)",fontFamily:"var(--mono)",border:"1px solid var(--border)",borderRadius:999,padding:"2px 6px"}}>${srcTag+(v.confidence>0?(" "+Math.round(v.confidence*100)+"%"):"")}</span>
+      </div>
+      ${lines.length>0&&html`<div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.6}}>${lines.map(function(txt,i){return html`<div key=${"jgr"+i}>• ${txt}</div>`})}</div>`}
+      ${isBad&&html`<div style=${{fontSize:10,color:"var(--dim)",marginTop:6,lineHeight:1.5}}>${lang==="tr"?"Yine de ekleyebilirsin — bu yalnizca bir uyari.":"You can still add it — this is only a warning."}</div>`}
+    </div>`;
+  }
+
+  /* MODUL 2 — serbest metinden otomatik doldurma onerisi */
+  function jevSuggestUi(){
+    var sug=(jevSuggest!==null)?jevSuggest:jevSuggestLocal;
+    if(!sug)return null;
+    if(!sug.category&&sug.amount==null)return null;
+    var cobj=sug.category?fc(sug.category):null;
+    var pct=Math.round((sug.confidence||0)*100);
+    var manual=!!sug.requiresManualReview;
+    var col=manual?"var(--amber)":"var(--blue2)";
+    return html`<div style=${{display:"flex",alignItems:"center",gap:8,padding:"9px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(59,130,246,0.08)",border:"1px solid "+(manual?"rgba(245,158,11,0.28)":"rgba(59,130,246,0.25)")}}>
+      <span style=${{fontSize:14}}>${manual?"🤔":"🪄"}</span>
+      <div style=${{flex:1,minWidth:0}}>
+        <div style=${{fontSize:10,fontWeight:800,color:col}}>
+          ${cobj?(cobj.icon+" "+cobj.label):(lang==="tr"?"Kategori belirsiz":"Category unclear")}
+          ${sug.amount!=null?html`<span style=${{color:"var(--sub)",fontWeight:700}}> · ${f(sug.amount)}</span>`:null}
+          <span style=${{color:"var(--dim)",fontWeight:700}}> · %${pct}</span>
+        </div>
+        <div style=${{fontSize:9,color:"var(--dim)",marginTop:1}}>${manual?(lang==="tr"?"Jev emin degil — kontrol et":"Jev is not confident — review"):(lang==="tr"?"Jev metinden cikardi":"Jev extracted this")}${sug.engine==="typesafe"?" · Jev API":""}</div>
+      </div>
+      <button onClick=${function(){applyJevSuggestion(sug)}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#3b82f6,#6366f1)",color:"#fff",fontSize:10,fontWeight:800,cursor:"pointer",flexShrink:0}}>${lang==="tr"?"Doldur":"Fill"}</button>
+      ${jevEngine()==="typesafe"&&html`<button onClick=${function(){refineJevSuggestion(sug.text)}} title=${lang==="tr"?"Jev API ile tekrar sor":"Ask Jev API again"} style=${{padding:"6px 8px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>↻</button>`}
+    </div>`;
+  }
+
+  /* MODUL 3 — ozet sekmesindeki anomali karti + DeepSeek devri */
+  function jevAnomalyCard(){
+    if(jevAnomalies.length===0)return null;
+    var hot=jevHighCount>0;
+    return html`<div class="glass" style=${{padding:16,marginBottom:16,borderColor:hot?"rgba(255,68,102,0.24)":"rgba(245,158,11,0.22)",background:hot?"linear-gradient(145deg,rgba(255,68,102,0.07),rgba(255,255,255,0.02))":"linear-gradient(145deg,rgba(245,158,11,0.06),rgba(255,255,255,0.02))"}}>
+      <div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+        <span style=${{fontSize:18}}>🛰️</span>
+        <div style=${{flex:1}}>
+          <div style=${{fontSize:13,fontWeight:800,color:"var(--txt)"}}>${lang==="tr"?"Jev Arka Plan Taramasi":"Jev Background Scan"}</div>
+          <div style=${{fontSize:9,color:"var(--dim)",marginTop:1}}>${lang==="tr"?"Olasilik testleriyle bulunan sapmalar":"Deviations found by probability tests"}</div>
+        </div>
+        <span style=${{fontSize:11,fontWeight:800,padding:"3px 9px",borderRadius:999,background:hot?"rgba(255,68,102,0.16)":"rgba(245,158,11,0.16)",color:hot?"var(--red)":"var(--amber)"}}>${jevAnomalies.length}</span>
+        <button onClick=${function(){jevScanNow(false)}} title=${lang==="tr"?"Yeniden tara":"Rescan"} style=${{padding:"6px 8px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,cursor:"pointer"}}>↻</button>
+      </div>
+      ${jevAnomalies.slice(0,4).map(function(a){
+        var cobj=fc(a.categoryId);
+        var txt=jevAnomalyText(a,(cobj&&cobj.label)?cobj.label:a.categoryId,lang);
+        return html`<div key=${a.id} style=${{display:"flex",alignItems:"flex-start",gap:9,padding:"10px 11px",borderRadius:"var(--radius-sm)",background:"var(--card2)",border:"1px solid var(--border)",marginBottom:6}}>
+          <span style=${{fontSize:15,lineHeight:"1.3"}}>${txt.icon}</span>
+          <div style=${{flex:1,minWidth:0}}>
+            <div style=${{fontSize:11,fontWeight:800,color:txt.color,lineHeight:1.4}}>${txt.title}</div>
+            <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.5,marginTop:2}}>${txt.detail}</div>
+            <div style=${{display:"flex",gap:6,marginTop:7,flexWrap:"wrap"}}>
+              <button onClick=${function(){askDeepSeekAboutAnomaly(a)}} style=${{padding:"5px 9px",borderRadius:999,border:"1px solid rgba(168,85,247,0.32)",background:"rgba(168,85,247,0.10)",color:"#d8b4fe",fontSize:10,fontWeight:800,cursor:"pointer"}}>${lang==="tr"?"DeepSeek'e sor":"Ask DeepSeek"}</button>
+              <button onClick=${function(){dismissJevAnomaly(a)}} style=${{padding:"5px 9px",borderRadius:999,border:"1px solid var(--border)",background:"var(--card)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Gordum":"Dismiss"}</button>
+            </div>
+          </div>
+        </div>`;
+      })}
+      ${jevAnomalies.length>4&&html`<div style=${{fontSize:10,color:"var(--dim)",textAlign:"center",paddingTop:2}}>${"+"+(jevAnomalies.length-4)+(lang==="tr"?" tane daha":" more")}</div>`}
+      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+        <span style=${{fontSize:9,color:"var(--dim)"}}>${lang==="tr"?"Anomali = istatistiksel sapma, kesin hata degil.":"Anomaly = statistical deviation, not a confirmed error."}</span>
+        <button onClick=${clearJevAnomalies} style=${{padding:"4px 8px",borderRadius:999,border:"none",background:"none",color:"var(--dim)",fontSize:9,fontWeight:700,cursor:"pointer",textDecoration:"underline"}}>${lang==="tr"?"Tumunu temizle":"Clear all"}</button>
+      </div>
+    </div>`;
+  }
+
+  /* AYARLAR — Jev (System One) bolumu */
+  function jevSettingsUi(){
+    var cache=jevCacheRead();
+    var last=(cache&&cache.last)||null;
+    return html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
+      <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.55}}>${lang==="tr"?"Jev = System One karar modeli: hizli, TIPLI ciktilar (choice / noul / score) ve kalibre guven skoru uretir. Sohbet/analiz DeepSeek'te kalir; Jev anlik kararlar ve arka plan taramalari icindir.":"Jev = a System One decision model: fast, TYPED outputs (choice / noul / score) with calibrated confidence. Chat and analysis stay on DeepSeek; Jev handles instant decisions and background scans."}</div>
+      <div>
+        <div style=${{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:5}}>${lang==="tr"?"Jev saglayicisi":"Jev provider"}</div>
+        <div style=${{display:"flex",gap:5,flexWrap:"wrap"}}>
+          ${Object.keys(JEV_PROVIDERS).map(function(pid){
+            var p=JEV_PROVIDERS[pid],act=jevProvider()===pid;
+            return html`<button key=${pid} onClick=${function(){jevSetProvider(pid);setJevNotice(lang==="tr"?("Saglayici: "+p.label+" ("+p.model+")"):("Provider: "+p.label+" ("+p.model+")"))}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${p.label}</button>`;
+          })}
+        </div>
+      </div>
+      <div style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",background:"rgba(99,102,241,0.07)",border:"1px solid rgba(99,102,241,0.2)",fontSize:10,color:"var(--txt)",lineHeight:1.5}}>
+        <div><strong>${lang==="tr"?"Aktif motor:":"Active engine:"}</strong> ${jevEngineLabel(lang)}</div>
+        <div style=${{color:"var(--sub)",marginTop:2,fontFamily:"var(--mono)",fontSize:9,wordBreak:"break-all"}}>${jevEndpoint()}</div>
+        <div style=${{color:"var(--sub)",marginTop:2}}>${lang==="tr"?"Anahtar yoksa ag cagrisi yapilmaz; kararlar cihazindaki yerel cekirdekten aninda gelir.":"Without a key nothing goes over the network; decisions come instantly from the on-device local core."}</div>
+      </div>
+      <input class="inp-field" type="password" placeholder=${lang==="tr"?("Jev API anahtari ("+jevProviderConf().keyHint+")"):("Jev API key ("+jevProviderConf().keyHint+")")} value=${jevKeyDraft} onInput=${function(e){setJevKeyDraft(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
+      <div style=${{fontSize:9,color:"var(--amber)",lineHeight:1.5}}>⚠ ${lang==="tr"?"Anahtar yalnizca bu cihazda saklanir (koda gomulmez) ama tarayicidan cikan bir anahtar sizabilir. OpenRouter panelinden bu anahtara HARCAMA LIMITI koyman onerilir. Bedava/limitsiz kullanmak icin tasimayi 'Apps Script proxy' yapabilirsin.":"The key is stored only on this device (never in the code), but a key used from the browser can leak. Set a SPEND LIMIT on this key in the OpenRouter dashboard. To keep it off the client, switch transport to 'Apps Script proxy'."}</div>
+      <div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Anahtar almak icin: ":"Get a key: "}<span style=${{fontFamily:"var(--mono)"}}>${jevProviderConf().consoleURL}</span></div>
+      <div style=${{display:"flex",gap:6}}>
+        ${[{id:"device",l:lang==="tr"?"Bu cihazda hatirla":"Remember on device"},{id:"session",l:lang==="tr"?"Sadece bu oturum":"Session only"}].map(function(m){
+          var act=jevKeyMode===m.id;
+          return html`<button key=${m.id} onClick=${function(){setJevKeyMode(m.id);try{localStorage.setItem(JEV_KEY_MODE_KEY,m.id)}catch(e){}}} style=${{flex:1,padding:"8px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer"}}>${m.l}</button>`;
+        })}
+      </div>
+      <div style=${{display:"flex",gap:6}}>
+        <button onClick=${jevSaveKey} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Kaydet":"Save"}</button>
+        <button onClick=${jevRunTest} disabled=${jevTesting} style=${{padding:"10px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.35)",background:"rgba(99,102,241,0.08)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:jevTesting?"wait":"pointer"}}>${jevTesting?"⟳":"📡 Test"}</button>
+        ${jevKeySaved&&html`<button onClick=${jevRemoveKey} style=${{padding:"10px 12px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${lang==="tr"?"Sil":"Remove"}</button>`}
+      </div>
+      <div>
+        <div style=${{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:5}}>${lang==="tr"?"Calisma modu":"Engine mode"}</div>
+        <div style=${{display:"flex",gap:5,flexWrap:"wrap"}}>
+          ${[{id:"auto",l:lang==="tr"?"auto (yerel + yukseltme)":"auto (local + upgrade)"},{id:"typesafe",l:lang==="tr"?"sadece Jev API":"Jev API only"},{id:"local",l:lang==="tr"?"sadece yerel":"local only"}].map(function(m){
+            var act=jevEngineMode===m.id;
+            return html`<button key=${m.id} onClick=${function(){jevSetEngineMode(m.id)}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${m.l}</button>`;
+          })}
+        </div>
+      </div>
+      <div>
+        <div style=${{fontSize:10,fontWeight:700,color:"var(--sub)",marginBottom:5}}>${lang==="tr"?"Tasima (tarayici engellerse proxy)":"Transport (proxy if the browser blocks)"}</div>
+        <div style=${{display:"flex",gap:5}}>
+          ${[{id:"direct",l:lang==="tr"?"dogrudan (api.typesafe.ai)":"direct (api.typesafe.ai)"},{id:"gas",l:lang==="tr"?"Apps Script proxy":"Apps Script proxy"}].map(function(m){
+            var act=jevTransport===m.id;
+            return html`<button key=${m.id} onClick=${function(){jevSetTransport(m.id)}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"1px solid "+(act?"var(--blue)":"var(--border)"),background:act?"var(--blue)":"var(--card2)",color:act?"#fff":"var(--sub)",fontSize:10,fontWeight:600,cursor:"pointer"}}>${m.l}</button>`;
+          })}
+        </div>
+        ${jevTransport==="gas"&&html`<div style=${{fontSize:9,color:"var(--amber)",marginTop:5,lineHeight:1.5}}>${lang==="tr"?"Proxy, Drive Senkron ayarlarindaki URL ve token'i kullanir (token govdede, URL'de degil). Code.gs icindeki 'jev' action'i gerekir.":"The proxy uses the Drive Sync URL and token (token in body, never in URL). The 'jev' action in Code.gs is required."}</div>`}
+      </div>
+      ${jevNotice&&html`<div style=${{padding:"9px 11px",borderRadius:"var(--radius-xs)",background:"rgba(99,102,241,0.06)",border:"1px solid rgba(99,102,241,0.22)",fontSize:10,color:"var(--txt)",lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>${jevNotice}</div>`}
+      ${last&&html`<div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Son cagri: ":"Last call: "}${String(last.code||"ok")} · ${String(last.latencyMs||0)} ms${last.ok?"":(lang==="tr"?" (basarisiz)":" (failed)")}</div>`}
+      <button onClick=${function(){setJevOpen(!jevOpen)}} style=${{padding:"6px 10px",borderRadius:999,border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",alignSelf:"flex-start"}}>${jevOpen?(lang==="tr"?"Kendi kendini testi gizle":"Hide self-test"):(lang==="tr"?"🧪 Yerel cekirdek testi":"🧪 Local core self-test")}</button>
+      ${jevOpen&&html`<div style=${{padding:"10px 12px",borderRadius:"var(--radius-xs)",background:"var(--card2)",border:"1px solid var(--border)",fontSize:9,lineHeight:1.7,fontFamily:"var(--mono)",whiteSpace:"pre-wrap",maxHeight:220,overflow:"auto"}}>${(function(){
+        var res=jevSelfTest(lang);
+        var pass=res.filter(function(x){return x.pass}).length;
+        return (pass===res.length?"✓ "+pass+"/"+res.length:"⚠ "+pass+"/"+res.length)+"\n"+res.map(function(x){return (x.pass?"✓":"✗")+" "+x.name+(x.extra?(" ["+x.extra+"]"):"")}).join("\n");
+      })()}</div>`}
+    </div>`;
+  }
+
   var annualData=um(function(){
     var yr=now.getFullYear();var totalInc=0;var totalExp=0;var catMap={};
     for(var m=0;m<12;m++){
@@ -2574,6 +4666,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       {id:"cur",icon:"💱",label:t("currency"),val:curId},
       {id:"data",icon:"💾",label:t("data"),val:""},
       {id:"aikey",icon:"🔑",label:lang==="tr"?"DeepSeek API Key":"DeepSeek API Key",val:aiKeySaved?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Eksik":"Missing")},
+      {id:"jev",icon:"⚡",label:"Jev (System One)",val:(jevEngine()==="typesafe")?(lang==="tr"?"Jev API":"Jev API"):(lang==="tr"?"Yerel cekirdek":"Local core")},
       {id:"drive",icon:"☁️",label:t("drive_sync"),val:driveUrl?t("drive_active"):t("drive_off")},
       {id:"notif",icon:"🔔",label:t("notifications"),val:notifOn?(lang==="tr"?"Açık":"On"):(lang==="tr"?"Kapalı":"Off")},
       {id:"pin",icon:"🔒",label:t("pin_protect"),val:pinIsSet()?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Yok":"None")}
@@ -2600,6 +4693,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
             <input ref=${fileRef} type="file" accept=".json" onChange=${importJSON} style=${{display:"none"}}/>
             <button onClick=${function(){window.print()}} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("print_report")}</button>
           </div>`}
+          ${sec.id==="jev"&&jevSettingsUi()}
           ${sec.id==="aikey"&&html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
             <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.5}}>${lang==="tr"?"DeepSeek V4.1 Flash (deepseek-flash) ile çalışır. Key sadece senin cihazında saklanır, koda gömülmez. MiniMax artık kullanılmıyor; sk- ile başlayan bir DeepSeek key'i gir.":"Works with DeepSeek V4.1 Flash (deepseek-flash). The key is stored only on your device, never in the code. MiniMax is no longer used; enter a DeepSeek key starting with sk-."}</div>
             <input class="inp-field" type="password" placeholder=${lang==="tr"?"sk-... ile başlayan DeepSeek key":"DeepSeek key starting with sk-..."} value=${aiKeyDraft} onInput=${function(e){setAiKeyDraft(e.target.value)}} style=${{fontSize:11,fontFamily:"var(--mono)"}}/>
@@ -2680,7 +4774,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       </div>`
     })}
     <div style=${{padding:"12px 18px",borderTop:"1px solid var(--border)",fontSize:10,color:"var(--dim)",textAlign:"center"}}>
-      Para Kontrol v${APP_VERSION} · ${AI_CONFIG.modelLabel} · ${lang==="tr"?"veriler yalnızca bu cihazda":"data stays on this device"}
+      Para Kontrol v${APP_VERSION} · ${AI_CONFIG.modelLabel} · ${jevEngineLabel(lang)} · ${lang==="tr"?"veriler yalnızca bu cihazda":"data stays on this device"}
     </div>
   </div>`}
 
@@ -2826,6 +4920,9 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     </div>`}
 
     <input class="inp-field" type="text" placeholder=${t("add_note")} value=${note} onInput=${function(e){setNote(e.target.value)}} onKeyDown=${quickSaveKey} style=${{marginBottom:10}}/>
+    ${jevFillMsg&&html`<div style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(6,255,165,0.08)",border:"1px solid rgba(6,255,165,0.25)",fontSize:10,color:"var(--green)",fontWeight:700}}>${jevFillMsg}</div>`}
+    ${jevSuggestUi()}
+    ${jevGateUi()}
     <button class=${"btn-primary"+(ok?" ok":"")} onClick=${addExp}>
       ${ok?t("added"):fc(cat).icon+" "+(dt===tdy()?t("add_expense"):edp.d+" "+MN[edp.m]+t("add_to_date"))}
     </button>
@@ -3065,6 +5162,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
   </div>`}
   <!-- ÖZET TAB -->
   ${tab==="ozet"&&html`<div style=${{padding:"0 16px"}} class="fade-in">
+    ${jevAnomalyCard()}
     <div style=${{display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginBottom:16}}>
       <button onClick=${function(){var i=avM.indexOf(vMK);if(i<avM.length-1){var n=avM[i+1].split("-");setVm({y:+n[0],m:+n[1]-1})}}} style=${{width:34,height:34,borderRadius:8,background:"var(--card)",border:"1px solid var(--border)",color:"var(--sub)",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>◀</button>
       <span style=${{fontSize:17,fontWeight:800,letterSpacing:"-0.02em"}}>${MN[vm.m]+" "+vm.y}</span>
@@ -3590,10 +5688,10 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
   <!-- BOTTOM TAB BAR -->
   <div style=${{position:"fixed",bottom:0,left:0,right:0,padding:"12px 16px 16px",zIndex:100,background:dk?"linear-gradient(to top, rgba(7,9,15,0.98) 60%, rgba(7,9,15,0) 100%)":"linear-gradient(to top, rgba(240,237,232,0.98) 60%, rgba(240,237,232,0) 100%)"}}>
     <div class="tabbar" style=${{maxWidth:448,margin:"0 auto"}}>
-      ${[{id:"harcama",lk:"tab_exp",i:"✏️"},{id:"borc",lk:"tab_debts",i:"💳"},{id:"butce",lk:"tab_budget",i:"📊"},{id:"ozet",lk:"tab_summary",i:"📈"}].map(function(tb){var act=tab===tb.id;var showBadge=tb.id==="butce"&&budgetAlert&&!act;return html`<button key=${tb.id} onClick=${function(){setTab(tb.id)}} class=${"tab-btn"+(act?" active":"")}>
+      ${[{id:"harcama",lk:"tab_exp",i:"✏️"},{id:"borc",lk:"tab_debts",i:"💳"},{id:"butce",lk:"tab_budget",i:"📊"},{id:"ozet",lk:"tab_summary",i:"📈"}].map(function(tb){var act=tab===tb.id;var showBadge=(tb.id==="butce"&&budgetAlert&&!act)||(tb.id==="ozet"&&jevAnomalies.length>0&&!act);var badgeHot=tb.id==="ozet"&&jevHighCount>0;return html`<button key=${tb.id} onClick=${function(){setTab(tb.id)}} class=${"tab-btn"+(act?" active":"")}>
         <div style=${{position:"relative",display:"inline-flex",alignItems:"center",justifyContent:"center"}}>
           <span style=${{fontSize:18}}>${tb.i}</span>
-          ${showBadge&&html`<span class="notif-dot" style=${{position:"absolute",top:-2,right:-6}}/>`}
+          ${showBadge&&html`<span class="notif-dot" style=${{position:"absolute",top:-2,right:-6,background:badgeHot?"var(--red)":"var(--amber)",boxShadow:"0 0 6px "+(badgeHot?"var(--redglow)":"rgba(245,158,11,0.45)")}}/>`}
         </div>
         <span>${t(tb.lk)}</span>
       </button>`})}

@@ -3,7 +3,113 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v11.2` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Sürüm:** `v12.0` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+
+## v12.0 — Hibrit yapay zekâ: DeepSeek (System 2) + Jev (System 1)
+
+DeepSeek **akıl hocası** olarak kaldı: sohbet, aylık yorum, derin analiz, sesli asistan. Yanına
+**System One** karar modeli **Jev** eklendi: milisaniyelik kararlar, **tipli** çıktılar
+(`choice` / `noul` / `score` + kalibre güven) ve arka plan otomasyonları.
+
+| | System 2 (DeepSeek V4.1 Flash) | System 1 (Jev) |
+|---|---|---|
+| İş | sohbet, yorum, analiz, sesli asistan | karar, sınıflandırma, tarama |
+| Çıktı | serbest metin | tipli değer + olasılık + güven |
+| Gecikme | saniyeler | ~0 ms (yerel) / 70-500 ms (API) |
+| Nerede | `callDeepSeekAI()` | `jevAsk()` |
+
+### Jev nereden çağrılıyor?
+
+**OpenRouter** hesabındaki API anahtarıyla: `POST https://openrouter.ai/api/v1/systemone`
+(model `typesafe/jev-latest`). TypeSafe SDK'larıyla **aynı System One sözleşmesi** kullanılır, yani
+gövde `{state, model, questions}` → yanıt `{model, answers, usage}`. TypeSafe'a doğrudan bağlanmak
+da mümkündür (Ayarlar → Jev → sağlayıcı seçimi).
+
+### Neden iki motor var?
+
+Ağ turu 70-500 ms ve tarayıcıdan yapılan çapraz-köken istek CORS'a takılabilir. "Ekle" anında
+uyarı göstermek için bu yeterli değil. Bu yüzden `JEV_CONFIG.engine` üç mod sunar:
+
+| Mod | Davranış |
+|---|---|
+| `auto` (varsayılan) | Yerel çekirdek kararı **anında** verir; Jev API'si yanıt verirse karar **yükseltilir**. Arayüz asla beklemez. |
+| `typesafe` | Yalnızca Jev API'si (ağ kapalıysa yine yerel karara düşer). |
+| `local` | Yalnızca yerel çekirdek; hiç ağ çağrısı yapılmaz. |
+
+**Yerel System One çekirdeği** aynı soru tiplerini (`choice`/`noul`/`score`) aynı tipli şekilde
+yanıtlar, ama skorlayıcısı kayıtlı olmayan soruda **abstain** eder (uydurmaz) ve deterministik koda
+düşer. Güven formülü `top − 0.5×ikinci` TypeSafe'in yayınladığı değerlerle örtüşür
+(0.85/0.15→0.78 · 0.56/0.44→0.33 · 1.0/0.0→1.0).
+
+### Altın kural
+
+> **Para matematiği her zaman kodda kalır.** `deficitAmount`, bütçe aşımı, projeksiyon ve eksik
+> tutar saf koddan gelir. Model yalnızca yargı üretir ve izni **daraltabilir**, asla **genişletemez**.
+> Bütçesi tanımsız bir kategoride model "breach" dese bile karar en fazla `strain` olur (gereksiz blok yok).
+
+### 1) Anlık Harcama Risk Kapısı (Pre-Check / Triage)
+
+Kullanıcı tutarı yazdığı **anda** (Ekle'ye basmadan) hesaplanır — `um()` içinde, render sırasında:
+
+```js
+var gate = jevRiskGateSync(input, lang);   // {isAllowed, riskLevel, deficitAmount, confidence, source, reasons[]}
+```
+
+- `riskLevel`: `safe` | `watch` | `strain` | `breach`
+- `deficitAmount`: **koddan** = `max(0, spent + amount − budget)`
+- 4 tipli soru tek istekte: `budget_fit` (noul), `risk_class` (choice), `repeat_risk` (noul), `essential` (noul)
+- DeepSeek hiç beklenmez; uyarı milisaniyeler içinde görünür. İstersen "Akıl Danış" ile
+  DeepSeek'e (System 2) devredip ayrıntılı yorum alabilirsin.
+
+### 2) Akıllı ve Hızlı İşlem Kategorizasyonu
+
+`"Trendyol'dan kulaklık aldık, 1200 TL"` →
+
+```js
+jevCategorizeLocal(text, cats, hist, lang)
+// {category:"giyim", confidence:0.62, requiresManualReview:false,
+//  amount:1200, note:"Trendyol'dan kulaklık aldık", alternatives:[…]}
+```
+
+- **JSON parse edilmez.** Çıktı doğrudan tipli nesnedir; `jevParseLoose()` yalnızca ham
+  yanıtı güvenle nesneye çevirir (bozuksa `null`, asla throw etmez).
+- Kanıt = `log(oncelik) + log(olabilirlik)`: öncelik kullanıcının **kendi 90 günlük geçmişinden**,
+  olabilirlik Türkçe marka/kelime sözlüğünden (ek toleranslı önek eşleşmesi: `marketten`~`market`).
+- Öncelik kütlesinin %15'i "harcama değil" seçeneğine ayrılır; kanıt yoksa rastgele kategori seçilmez.
+- `requiresManualReview`: güven `0.55` altındaysa, `needs_review` noul'u `≥0.6` ise veya
+  ikinci aday birinciye çok yakınsa `true`.
+
+### 3) Arka Planda Bütçe Anomali Taraması (Background Watcher)
+
+Veri değiştikçe (debounce + `requestIdleCallback`) çalışan, ağsız ve ~1 ms süren tarama:
+
+| Test | Yöntem | Yakaladığı |
+|---|---|---|
+| `cat_daily_spike` | değiştirilmiş z (MAD; MAD=0 ise 1.253×ortalama sapma) | "bugün alışılmadık yüksek" |
+| `freq_spike` | Poisson kuyruk `P(X≥k)` | "bugün çok fazla işlem" |
+| `budget_projection` | Normal kuyruk (kalan harcama) | "ay sonu bütçe aşılacak" + olasılık |
+| `overspend_rate` | Wilson üst sınırı | "sık sık günlük limitin üstünde" |
+| `mom_shift` | Welch t testi | "bu ay geçen aydan anlamlı yüksek" |
+| `amount_outlier` | log-normal z | "tek başına dev tutar" |
+| `silent_recurring` | 3+ ayda aynı not+tutar | "farkında olmadığın abonelik" |
+
+- Sonuçlar tiplidir (`{kind, severity, score, pValue, data}`) ve metin arayüzde üretilir.
+- **Ana ekranda hafif rozet:** Özet sekmesi sekme çubuğunda nokta (yüksek önemde kırmızı, diğerinde turuncu).
+- Rozete/karta tıklandığında **DeepSeek sohbeti** anomali bağlamıyla açılır (`jevAnomalyToPrompt`) —
+  System 1 bulur, System 2 açıklar.
+- Eşikler tek yerde: `JEV_THRESHOLDS`. Anomali = istatistiksel sapma, kesin hata değildir.
+
+### Jev anahtarı ve gizlilik
+
+- Anahtar yalnızca cihazda (`pk_jev_key`) veya oturumda (`sessionStorage`) tutulur; **koda gömülmez**.
+- **Önemli:** tarayıcıdan çıkan bir anahtar sızabilir. OpenRouter panelinden bu anahtara
+  **harcama limiti** koy. Anahtarı istemciden tamamen uzak tutmak için
+  **Ayarlar → Jev → Taşıma → Apps Script proxy** seç: istek kendi `gas/Code.gs`'in üzerinden geçer
+  (token gövdede, URL'de asla; hedef adres sunucuda beyaz listedir — SSRF kapalı).
+  Proxy için `gas/Code.gs`'in bu sürümünü yayınla: script rev **3 → 4** (`jev` action'ı eklendi).
+- Anahtar yoksa ağ çağrısı **hiç** yapılmaz; her şey yerel çekirdekle anında sonuçlanır.
+- Doğrulama: Ayarlar → Jev → **📡 Test** (gerçek çağrı + gecikme) ve **🧪 Yerel çekirdek testi**
+  (49 kontrol, ağsız). `index.html?testjev=1` de aynı self-test'i ekranda çalıştırır.
 
 ## v11.2 — Drive senkron kurulumu tamamlandı + yer tutucu düzeltmesi
 
@@ -119,7 +225,7 @@ Sunucu hata kodları: `unauthorized`, `server_token_missing`, `method_not_allowe
 - PIN yalnızca arayüzü kilitler; veriyi şifrelemez. Cihazı paylaşıyorsan tarayıcı profilini ayrı tut.
 - AI anahtarı istersen yalnızca oturum belleğinde tutulabilir (önerilir).
 - Drive token'ı **hiçbir zaman URL'de taşınmaz** (ne istemcide ne sunucuda kabul edilir).
-- `localStorage` anahtarları: `para_kontrol_demo_v2` (veri), `pk_lang`, `pk_theme`, `pk_cur`, `pk_pin`, `pk_pin_lock`, `pk_notif`, `pk_ai_key`, `pk_ai_key_mode`, `pk_ai_think`, `pk_drive_url`, `pk_drive_token`, `pk_drive_snapshot`, `pk_voice_uri`, `pk_voice_speed`.
+- `localStorage` anahtarları: `para_kontrol_demo_v2` (veri), `pk_lang`, `pk_theme`, `pk_cur`, `pk_pin`, `pk_pin_lock`, `pk_notif`, `pk_ai_key`, `pk_ai_key_mode`, `pk_ai_think`, `pk_drive_url`, `pk_drive_token`, `pk_drive_snapshot`, `pk_voice_uri`, `pk_voice_speed`, `pk_jev_key`, `pk_jev_key_mode`, `pk_jev_mode`, `pk_jev_transport`, `pk_jev_provider`, `pk_jev_cache`.
 
 ## Demo veriler
 
@@ -146,14 +252,17 @@ python3 -m http.server 8080      # http://localhost:8080
 
 - `test.js` — render, sekme geçişleri, gizli bölümler, `parseNum`/`fmt`, PIN (SHA-256 + 5 deneme kilidi), DeepSeek istek gövdesi (thinking on/off, 401 mesajı, `reasoning_content`), `sanitizeRemote` (CSS injection / tip / limit), `remoteSuspicious`, güvenli Drive protokolü.
 - `test-sync.js` — Drive senaryoları: boş uzak veri → çakışma onayı (yerel veri korunur), geçerli uzak veri → uygulama + anlık görüntü, "Yereli gönder" ile uzak veriyi ezme, `📡 Test` çıktısı, eski zayıf script için GÜVENLİK uyarısı.
+- `test-jev.js` — Jev hibrit katmanı (89 kontrol): OpenRouter endpoint/model/başlıkları, tipli cevap doğrulama (küme dışı seçim · aralık dışı olasılık reddi), `jevParseLoose` dayanıklılığı, güven formülü, risk kapısı (`isAllowed`/`riskLevel`/`deficitAmount`, "izin genişletilemez" kuralı), kategorizasyon (marka→kategori, TR tutar biçimleri, "harcama değil" reddi, kişisel geçmiş öğrenmesi), olasılık testleri (Poisson/Wilson/Welch/modified-z), ağ hatası & bozuk JSON'da throw etmeme, `sanitizeRemote` beyaz listesi, ayarlar UI'si, arayüzde anlık uyarı ve self-test paneli.
 
 ```bash
-cd /tmp/smoke && node test.js && node test-sync.js   # jsdom + yerel React kopyaları gerekir
+cd /tmp/smoke && node test.js && node test-sync.js && node test-jev.js   # jsdom + yerel React kopyaları gerekir
 ```
 
 ## Bilinen sınırlar
 
 - Tek `index.html` → ilk yükleme ~250 KB; React/htm/grafikler CDN'den gelir. İnternet yoksa uygulama açılmaz.
 - Grafikler ve Excel dışa aktarma CDN'e bağlıdır.
-- Uygulama tamamen istemci tarafıdır: sunucu yok, AI istekleri doğrudan tarayıcıdan DeepSeek'e gider; fiyatlandırma/limitler DeepSeek'e aittir.
+- Uygulama tamamen istemci tarafıdır: sunucu yok, AI istekleri doğrudan tarayıcıdan DeepSeek'e (sohbet/analiz) ve Jev için OpenRouter'a (`api/v1/systemone`) gider; fiyatlandırma/limitler sağlayıcılara aittir.
+  Anahtarı istemciden uzak tutmak istersen **Ayarlar → Jev → Taşıma → Apps Script proxy** kullanılabilir (DeepSeek için böyle bir proxy yok).
+- Jev kararları **öneri**dir: yerel çekirdek kural tabanlıdır (kalibre edilmemiş), API yanıtı ise kalibre olasılık taşır. `source` alanı hangi motorun karar verdiğini gösterir. Butce/para hesabı her zaman koddan gelir.
 - Veri kaybına karşı düzenli olarak **Ayarlar → 💾 Veri → JSON Yedek Al** kullanman önerilir.
