@@ -13,7 +13,7 @@ openrouter*.txt
 
 # Test / arac ciktilari
 node_modules/
-package-lock.json
+# NOT: package-lock.json BILEREK takip edilir (CI `npm ci` ile deterministik kurulum yapar)
 /tmp-*
 
 # Yedek dosyalari

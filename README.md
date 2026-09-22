@@ -3,7 +3,42 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v12.1` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Sürüm:** `v12.2` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Testler:** `npm ci && npm test` — 222 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+
+## v12.2 — Test altyapısı + CI (ve README'nin gerçekle hizalanması)
+
+Bu sürüm **uygulama davranışını değiştirmez**; deponun doğrulanabilirliğini kurar.
+
+| # | Ne | Neden |
+|---|---|---|
+| 1 | `tests/` — gerçekten çalışan testler (`test.js`, `test-sync.js`, `test-jev.js`, `run.js`, `harness.js`) | v12.1'e kadar README testlerden bahsediyordu ama **dosyalar depoda yoktu**; `/tmp/smoke` gibi yerel bir klasöre işaret ediyordu, yani kimse doğrulayamıyordu |
+| 2 | `gas/Code.gs` testleri **gerçekten çalıştırır** (vm + Apps Script taklidi) | Proxy'nin güvenlik iddiaları (POST-only, token yalnızca gövdede, SSRF kapalı beyaz liste, hız/boyut limiti) artık kanıtlanıyor |
+| 3 | `.github/workflows/ci.yml` | Her push/PR'da sürüm+`<title>` uyumu, `node --check` ve 222 test koşar (Pages doğrudan `main`'den yayınlandığı için tek kapı buydu) |
+| 4 | `package.json` + `package-lock.json` | Testler `jsdom` ile; React/ReactDOM/htm **yerel** kopyalardan gömülür — testler CDN'e çıkmaz, çevrimdışı deterministiktir |
+| 5 | `LICENSE` (MIT) | Depo public'ti ve lisansı yoktu (= kullanım izni belirsiz) |
+| 6 | README düzeltmeleri | Aşağıdaki "Düzeltilen yanlış iddialar" bölümü |
+
+### Düzeltilen yanlış iddialar
+
+| İddia (v12.1) | Gerçek |
+|---|---|
+| "Grafikler ve Excel dışa aktarma CDN'e bağlıdır" | Grafikler **elle yazılmış inline SVG**, CSV dışa aktarma `Blob` ile — ikisi de CDN'siz çalışır. CDN'den gelen yalnızca React/ReactDOM/htm ve fontlar |
+| "Yerel çekirdek testi (53 kontrol)" | Ölçülen: **63 kontrol** (`jevSelfTest()`) |
+| "`test-jev.js` — 116 kontrol" | Ölçülen: `test-jev.js` **85 kontrol** (bunun içinde 63'lük yerel çekirdek self-testi de var) |
+| "Testler: `cd /tmp/smoke && node test.js ...`" | Testler artık depoda: `npm ci && npm test` |
+| "ilk yükleme ~250 KB" | Dosya ~400 KB (`index.html`) |
+
+### Ölçülen test sonucu (v12.2)
+
+```
+$ npm test
+== test.js:      ALL PASS  84/84
+== test-sync.js: ALL PASS  53/53
+== test-jev.js:  ALL PASS  85/85
+
+TAMAMI GECTI — 222 kontrol, 0 hata
+```
 
 ## v12.1 — Jev düzeltmesi: doğru uç nokta + doğrulanmış model slug'ı
 
@@ -149,7 +184,7 @@ Veri değiştikçe (debounce + `requestIdleCallback`) çalışan, ağsız ve ~1 
   Proxy için `gas/Code.gs`'in bu sürümünü yayınla: script rev **3 → 4** (`jev` action'ı eklendi).
 - Anahtar yoksa ağ çağrısı **hiç** yapılmaz; her şey yerel çekirdekle anında sonuçlanır.
 - Doğrulama: Ayarlar → Jev → **📡 Test** (gerçek çağrı + adım adım teşhis) ve **🧪 Yerel çekirdek testi**
-  (53 kontrol, ağsız). `index.html?testjev=1` de aynı self-test'i ekranda çalıştırır.
+  (63 kontrol, ağsız). `index.html?testjev=1` de aynı self-test'i ekranda çalıştırır.
 
 ### Jev'in çalıştığını nasıl anlarım?
 
@@ -158,7 +193,7 @@ Veri değiştikçe (debounce + `requestIdleCallback`) çalışan, ağsız ve ~1 
 | # | Nerede | Ne görmelisin |
 |---|---|---|
 | 1 | **Ayarlar → Jev → 📡 Test** | Yeşil **“✓ Jev ÇALIŞIYOR — xxx ms”** + adım listesi (anahtar okundu → istek gönderildi → JSON ayrıştırıldı → tipli cevaplar doğrulandı) + `noul`/`choice`/`score` değerleri. Kırmızı ✗ varsa teşhis **hangi adımda koptuğunu ve ne yapılacağını** yazar. |
-| 2 | **Ayarlar → Jev → 🧪 Yerel çekirdek testi** | `✓ 53/53` — ağsız çalışır, yani anahtar/CORS sorunundan bağımsız olarak kodun sağlam olduğunu kanıtlar. |
+| 2 | **Ayarlar → Jev → 🧪 Yerel çekirdek testi** | `✓ 63/63` — ağsız çalışır, yani anahtar/CORS sorunundan bağımsız olarak kodun sağlam olduğunu kanıtlar. |
 | 3 | **Harcama sekmesi (canlı davranış)** | Büyük bir tutar yaz → uyarı kutusunun sağ üstündeki etikete bak: **`jev %78`** = karar Jev API'sinden geldi, **`yerel kural`** = cihaz içi çekirdek (ağ yok/anahtar yok/CORS). |
 
 Ek olarak **Özet** sekmesinde `🛰️ Jev Arka Plan Taraması` kartı ve sekme çubuğunda anomali rozeti
@@ -320,20 +355,35 @@ python3 -m http.server 8080      # http://localhost:8080
 
 ### Testler
 
-`index.html` tek dosya olduğu için testler jsdom ile uçtan uca çalışır (CDN yerine yerel React/htm kopyaları):
-
-- `test.js` — render, sekme geçişleri, gizli bölümler, `parseNum`/`fmt`, PIN (SHA-256 + 5 deneme kilidi), DeepSeek istek gövdesi (thinking on/off, 401 mesajı, `reasoning_content`), `sanitizeRemote` (CSS injection / tip / limit), `remoteSuspicious`, güvenli Drive protokolü.
-- `test-sync.js` — Drive senaryoları: boş uzak veri → çakışma onayı (yerel veri korunur), geçerli uzak veri → uygulama + anlık görüntü, "Yereli gönder" ile uzak veriyi ezme, `📡 Test` çıktısı, eski zayıf script için GÜVENLİK uyarısı.
-- `test-jev.js` — Jev hibrit katmanı (116 kontrol): OpenRouter endpoint/model/başlıkları, **model yedek zinciri** (400 “does not exist” → otomatik geçiş + çalışan slug'ı hatırlama + tüm adaylar ölüyse açık hata), tipli cevap doğrulama (küme dışı seçim · aralık dışı olasılık reddi), `jevParseLoose` dayanıklılığı, güven formülü, risk kapısı (`isAllowed`/`riskLevel`/`deficitAmount`, "izin genişletilemez" kuralı), kategorizasyon (marka→kategori, TR tutar biçimleri, "harcama değil" reddi, kişisel geçmiş öğrenmesi), olasılık testleri (Poisson/Wilson/Welch/modified-z), ağ hatası & bozuk JSON'da throw etmeme, `sanitizeRemote` beyaz listesi, ayarlar UI'si, arayüzde anlık uyarı, self-test paneli ve **📡 Test teşhis akışı** (adım adım sonuç, hata ipuçları, anahtarın maskelenmesi/sızmaması).
+`index.html` tek dosya olduğu için testler **jsdom ile uçtan uca** çalışır: dosya gerçekten
+yüklenir, React render edilir, uygulamanın kendi fonksiyonları çağrılır. CDN'e çıkılmaz —
+React/ReactDOM/htm `node_modules` içindeki yerel UMD kopyalarından gömülür, bu yüzden testler
+**çevrimdışı ve deterministiktir**.
 
 ```bash
-cd /tmp/smoke && node test.js && node test-sync.js && node test-jev.js   # jsdom + yerel React kopyaları gerekir
+npm ci          # yalnizca jsdom + React/htm (devDependencies)
+npm test        # 3 dosya, 222 kontrol, ~4 sn
 ```
+
+| Dosya | Ne sınar |
+|---|---|
+| `tests/test.js` (84) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
+| `tests/test-sync.js` (53) | **`gas/Code.gs` gerçekten çalıştırılır** (vm + `PropertiesService`/`ContentService`/`UrlFetchApp` taklidi): `doGet` her zaman `method_not_allowed`, `setToken` min 16 karakter, token doğrulama (`server_token_missing`/`unauthorized`), `put`/`get` turu ve rev, `bad_json`/`bad_action`/`bad_data`/`too_large`, dakikada 60 istek limiti, Jev proxy'sinde **SSRF kapalı beyaz liste** (istemcinin `url`/`endpoint` alanı yok sayılır), `bad_model` desen denetimi, üst akış hata eşlemesi (401/402/429/500/unreachable). İstemci tarafı: `drivePost` POST+`no-store`+token **gövdede** (URL'de asla), `_driveEnabled` koşulu |
+| `tests/test-jev.js` (85) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı) |
+
+Yerel olarak tek dosya çalıştırmak istersen:
+
+```bash
+node tests/test-jev.js
+```
+
+Uygulamanın kendi içinde de iki self-test kancası var: `index.html?testjev=1` (yerel çekirdek,
+ağsız) ve `index.html?testai=1` (DeepSeek bağlam dökümü).
 
 ## Bilinen sınırlar
 
-- Tek `index.html` → ilk yükleme ~250 KB; React/htm/grafikler CDN'den gelir. İnternet yoksa uygulama açılmaz.
-- Grafikler ve Excel dışa aktarma CDN'e bağlıdır.
+- Tek `index.html` (~400 KB) → ilk yükleme tek istek; React/ReactDOM/htm ve fontlar CDN'den gelir. İnternet yoksa uygulama **açılmaz** (offline/PWA desteği yok — service worker bilerek kaydedilmez).
+- Grafikler (inline SVG) ve CSV dışa aktarma (`Blob`) CDN'siz çalışır; dışa aktarmada `xlsx` kütüphanesi yok, CSV üretilir (Excel bunu açar).
 - Uygulama tamamen istemci tarafıdır: sunucu yok, AI istekleri doğrudan tarayıcıdan DeepSeek'e (sohbet/analiz) ve Jev için OpenRouter'a (`api/alpha/decisions`) gider; fiyatlandırma/limitler sağlayıcılara aittir.
   Anahtarı istemciden uzak tutmak istersen **Ayarlar → Jev → Taşıma → Apps Script proxy** kullanılabilir (DeepSeek için böyle bir proxy yok).
 - Jev kararları **öneri**dir: yerel çekirdek kural tabanlıdır (kalibre edilmemiş), API yanıtı ise kalibre olasılık taşır. `source` alanı hangi motorun karar verdiğini gösterir. Butce/para hesabı her zaman koddan gelir.

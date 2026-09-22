@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Bagimliliklari kur
+        run: npm ci
+
+      - name: Surum ve sozdizimi kontrolu (publish.sh ile ayni kurallar)
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/.*var APP_VERSION="\([^"]*\)".*/\1/p' index.html | head -1)"
+          [ -n "$VERSION" ] || { echo "HATA: APP_VERSION bulunamadi"; exit 1; }
+          TITLE="$(grep -o '<title>[^<]*</title>' index.html | head -1 | sed -E 's/<\/?title>//g')"
+          case "$TITLE" in
+            *"$VERSION"*) echo "OK: <title> ($TITLE) APP_VERSION ($VERSION) ile uyumlu" ;;
+            *) echo "HATA: <title> ($TITLE) APP_VERSION ($VERSION) ile uyusmuyor"; exit 1 ;;
+          esac
+          awk '/<script>/{f=1;next} /<\/script>/{f=0} f' index.html > /tmp/inline.js
+          node --check /tmp/inline.js
+          echo "OK: inline JS sozdizimi gecerli"
+
+      - name: Testler (jsdom, ag yok)
+        run: npm test
+
+      - name: Test ciktisini ozetle
+        if: always()
+        run: echo "Testler jsdom icinde calisir; CDN'e cikilmaz (React/htm yerel kopyalardan gomulur)."
