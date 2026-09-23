@@ -6,7 +6,7 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 const { runOne } = require("./runner-lib");
 
-const FILES = ["test.js", "test-sync.js", "test-jev.js", "test-runner.js"];
+const FILES = ["test.js", "test-sync.js", "test-jev.js", "test-category-order.js", "test-runner.js"];
 let pass = 0, fail = 0, failedFiles = [];
 
 for (const f of FILES) {

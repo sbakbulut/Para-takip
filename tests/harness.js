@@ -88,7 +88,9 @@ function polyfill(window, opts) {
   window.__alerts = [];
   window.alert = (m) => { window.__alerts.push(String(m)); };
   window.confirm = () => (opts && opts.confirmAnswer !== undefined ? !!opts.confirmAnswer : false);
-  window.prompt = () => null;
+  /* promptAnswers: sirali window.prompt cevaplari (kasa parolasi akislari icin); bitince null. */
+  const promptAnswers = opts && opts.promptAnswers ? [].concat(opts.promptAnswers) : [];
+  window.prompt = () => (promptAnswers.length ? promptAnswers.shift() : null);
 }
 
 /**
@@ -96,6 +98,7 @@ function polyfill(window, opts) {
  * @param {object} opts
  *   search         : "?tab=ozet" gibi sorgu (URL'e eklenir)
  *   storage        : { "pk_lang": "en", ... } onceden yazilacak localStorage degerleri
+ *   promptAnswers  : ["kasa-parolasi", ...] sirali window.prompt cevaplari
  *   fetch          : (url, init, window) => Promise  ozel fetch
  *   skipRenderWait : React render'ini beklemeyi atla
  */

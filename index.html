@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v12.2</title>
+<title>Para Kontrol v12.3</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="12.2";
+var APP_VERSION="12.3";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -2339,7 +2339,7 @@ tr:{
   search_ph:"Ara...",all:"Tümü",no_results:"Sonuç bulunamadı",no_exp:"Bu tarihte harcama yok 👆",
   amount_ph:"Tutar",note_ph:"Not",save:"✓ Kaydet",cancel:"İptal",
   total_debt:"Toplam Borç",new_btn:"+ Yeni",debt_name:"Borç adı",total_amount:"Toplam tutar",
-  edit_btn:"Düzenle",delete_btn:"Sil",paid_lbl:"Ödenen",remaining_lbl:"Kalan",
+  edit_btn:"Düzenle",move_up:"Yukarı taşı",move_down:"Aşağı taşı",category_order_hint:"Sıralamak için okları kullan.",delete_btn:"Sil",paid_lbl:"Ödenen",remaining_lbl:"Kalan",
   debt_name_ph:"Borç adı",debt_set_total:"Toplam:",debt_add_amt:"Ekle",reset_debt_btn:"Borcu Sıfırla",
   make_payment:"Ödeme Yap",pay_btn:"💳 Öde",payment_history:"Ödeme Geçmişi",
   income_mgmt:"Gelir Yönetimi",add_income:"+ Ekle",not_entered:"Girilmedi",
@@ -2400,7 +2400,7 @@ en:{
   search_ph:"Search...",all:"All",no_results:"No results found",no_exp:"No expenses on this date 👆",
   amount_ph:"Amount",note_ph:"Note",save:"✓ Save",cancel:"Cancel",
   total_debt:"Total Debt",new_btn:"+ New",debt_name:"Debt name",total_amount:"Total amount",
-  edit_btn:"Edit",delete_btn:"Delete",paid_lbl:"Paid",remaining_lbl:"Remaining",
+  edit_btn:"Edit",move_up:"Move up",move_down:"Move down",category_order_hint:"Use the arrows to reorder categories.",delete_btn:"Delete",paid_lbl:"Paid",remaining_lbl:"Remaining",
   debt_name_ph:"Debt name",debt_set_total:"Total:",debt_add_amt:"Add",reset_debt_btn:"Reset Debt",
   make_payment:"Make Payment",pay_btn:"💳 Pay",payment_history:"Payment History",
   income_mgmt:"Income Management",add_income:"+ Add",not_entered:"Not entered",
@@ -4796,6 +4796,8 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
   function renCat(cid){if(!cNI.trim())return;setS(function(p){return Object.assign({},p,{categories:cats.map(function(c){return c.id===cid?Object.assign({},c,{label:cNI.trim()}):c})})});setECId(null);setCNI("")}
   function chgIc(cid,ic){setS(function(p){return Object.assign({},p,{categories:cats.map(function(c){return c.id===cid?Object.assign({},c,{icon:ic}):c})})});setCIP(null)}
   function chgCl(cid,cl){setS(function(p){return Object.assign({},p,{categories:cats.map(function(c){return c.id===cid?Object.assign({},c,{color:cl}):c})})})}
+  /* Kategoriyi elle yukari/asagi tasi (delta -1 | +1). Uclarda hicbir sey degismez. */
+  function moveCat(cid,delta){setS(function(p){var list=(p.categories||cats).slice();var from=-1;for(var i=0;i<list.length;i++){if(list[i].id===cid){from=i;break}}var to=from+delta;if(from<0||to<0||to>=list.length)return p;var moved=list.splice(from,1)[0];list.splice(to,0,moved);return Object.assign({},p,{categories:list})})}
   function delCat(cid){if(cats.length<=1)return;setS(function(p){return Object.assign({},p,{categories:cats.filter(function(c){return c.id!==cid})})});if(cat===cid)setCat((cats.find(function(c){return c.id!==cid})||{}).id||"market")}
   function addCt(){if(!ncN.trim())return;setS(function(p){return Object.assign({},p,{categories:cats.concat([{id:"c_"+Date.now(),label:ncN.trim(),icon:ncI,color:ncC}])})});setAcM(false);setNcN("");setNcI("📦");setNcC("#22c55e");setSIP(false)}
   function resetAll(){if(confirm(t("reset_confirm")))setS(ini())}
@@ -5201,13 +5203,18 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
         <span style=${{fontSize:9,color:act?c.color:"var(--sub)",fontWeight:700}}>${c.label}</span>
       </button>`})}
     </div>`:html`<div style=${{marginBottom:14}}>
-      ${cats.map(function(c){return html`<div key=${c.id} style=${{marginBottom:5}}>
+      <p style=${{fontSize:10,color:"var(--sub)",margin:"0 0 7px",paddingLeft:2}}>${t("category_order_hint")}</p>
+      ${cats.map(function(c,i){return html`<div key=${c.id} style=${{marginBottom:5}}>
         <div style=${{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderRadius:"var(--radius-sm)",background:"var(--card)",border:"1px solid var(--border)"}}>
           <button onClick=${function(){setCIP(cIP===c.id?null:c.id)}} style=${{fontSize:20,background:c.color+"18",border:"2px solid "+c.color+"44",borderRadius:10,padding:"5px 9px",cursor:"pointer",flexShrink:0}}>${c.icon}</button>
           ${eCId===c.id?html`<div style=${{display:"flex",gap:4,flex:1}}>
             <input class="inp-field" type="text" value=${cNI} onInput=${function(e){setCNI(e.target.value)}} onKeyDown=${function(e){submitOnEnter(e,function(){renCat(c.id)})}} autoFocus style=${{flex:1}}/>
             <button onClick=${function(){renCat(c.id)}} style=${{background:"var(--blue)",borderRadius:"var(--radius-xs)",padding:"6px 12px",color:"#fff",fontSize:11,cursor:"pointer",border:"none",fontWeight:700}}>✓</button>
           </div>`:html`<span onClick=${function(){setECId(c.id);setCNI(c.label)}} style=${{flex:1,fontSize:13,cursor:"pointer",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${c.label}</span>`}
+          <div style=${{display:"flex",flexDirection:"column",gap:1,flexShrink:0}}>
+            <button type="button" aria-label=${t("move_up")} title=${t("move_up")} disabled=${i===0} onClick=${function(){moveCat(c.id,-1)}} style=${{width:27,height:22,padding:0,border:"none",borderRadius:5,background:"var(--card2)",color:"var(--sub)",fontSize:11,lineHeight:1,cursor:i===0?"default":"pointer",opacity:i===0?0.35:1}}>▲</button>
+            <button type="button" aria-label=${t("move_down")} title=${t("move_down")} disabled=${i===cats.length-1} onClick=${function(){moveCat(c.id,1)}} style=${{width:27,height:22,padding:0,border:"none",borderRadius:5,background:"var(--card2)",color:"var(--sub)",fontSize:11,lineHeight:1,cursor:i===cats.length-1?"default":"pointer",opacity:i===cats.length-1?0.35:1}}>▼</button>
+          </div>
           ${cats.length>1&&eCId!==c.id&&html`<button onClick=${function(){delCat(c.id)}} style=${{color:"var(--red)",fontSize:18,cursor:"pointer",padding:"2px 6px"}}>×</button>`}
         </div>
         ${cIP===c.id&&html`<div style=${{marginTop:4,padding:12,borderRadius:"var(--radius-sm)",background:"var(--card)",border:"1px solid var(--border)"}}>
