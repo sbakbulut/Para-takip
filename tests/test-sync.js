@@ -74,7 +74,7 @@ const TOKEN = "gizli-kelime-1234567890";
 /* ---------------- 2) POST-only kurali ---------------- */
 {
   const p = loadProxy({ properties: { token: TOKEN } });
-  s.eq("doGet her zaman reddeder (token URL'de tasinamaz)", p.doGet({ parameter: { token: TOKEN } }), { ok: false, error: "method_not_allowed", rev: "5" });
+  s.eq("doGet her zaman reddeder (token URL'de tasinamaz)", p.doGet({ parameter: { token: TOKEN } }), { ok: false, error: "method_not_allowed", rev: "6" });
 }
 
 /* ---------------- 3) Token dogrulama ---------------- */
@@ -86,9 +86,11 @@ const TOKEN = "gizli-kelime-1234567890";
   const p = loadProxy({ properties: { token: TOKEN } });
   s.eq("yanlis token -> unauthorized", p.post({ action: "ping", token: "yanlis-token-000000" }).error, "unauthorized");
   s.eq("bos token -> unauthorized", p.post({ action: "ping" }).error, "unauthorized");
+  s.eq("yetkisiz istekler hiz sayacini tuketmez", p.store.rate, undefined);
   const ok = p.post({ action: "ping", token: TOKEN });
   s.eq("dogru token -> ping ok", ok.ok, true);
-  s.eq("ping sunucu rev bildirir", ok.rev, "5");
+  s.ok("yetkili istek hiz sayacina eklenir", JSON.parse(p.store.rate).count === 1);
+  s.eq("ping sunucu rev bildirir", ok.rev, "6");
   s.eq("ping hasData=false (kayit yok)", ok.hasData, false);
 }
 
@@ -183,6 +185,27 @@ const TOKEN = "gizli-kelime-1234567890";
   const body = JSON.parse(w.driveBody({ action: "ping" }));
   s.eq("driveBody token'i govdeye koyar", body.token, TOKEN);
   s.eq("driveBody action alanini korur", body.action, "ping");
+
+  const allowedUrl = "https://script.google.com/macros/s/ABC_123/exec";
+  const rejectedUrls = [
+    "http://script.google.com/macros/s/ABC/exec",
+    "https://evil.example/macros/s/ABC/exec",
+    "https://script.google.com.evil.example/macros/s/ABC/exec",
+    "https://script.google.com/macros/s/ABC/dev",
+    "https://user:pass@script.google.com/macros/s/ABC/exec",
+    "https://script.google.com/macros/s/ABC/exec?token=x",
+    "https://script.google.com/macros/s/ABC/exec#fragment",
+  ];
+  s.true("yalnizca HTTPS Apps Script /exec URL kabul edilir", typeof w.driveUrlIsAllowed === "function" && w.driveUrlIsAllowed(allowedUrl));
+  rejectedUrls.forEach((url) => s.true("guvensiz senkron URL reddedilir: " + url, !w.driveUrlIsAllowed(url)));
+
+  let rejectedFetchCalls = 0;
+  w.fetch = () => { rejectedFetchCalls++; return Promise.resolve({}); };
+  w.localStorage.setItem("pk_drive_url", "https://evil.example/collect");
+  let rejectedPost = false;
+  try { await w.drivePost("ping"); } catch (e) { rejectedPost = true; }
+  s.true("drivePost fetch oncesi URL'i reddeder", rejectedPost && rejectedFetchCalls === 0);
+  w.localStorage.setItem("pk_drive_url", allowedUrl);
 
   /* drivePost: POST + no-store + token govdede, URL'de DEGIL */
   let seen = null;

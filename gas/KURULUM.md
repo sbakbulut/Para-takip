@@ -47,7 +47,7 @@ Gizli kelime: **en az 16 karakter**, tahmin edilemez. Örnek: `para-takip-2026-K
 URL='https://script.google.com/macros/s/BURAYA_ID/exec'
 TOKEN='gizli-kelimen'
 
-# 1) Güvenli protokol çalışıyor mu?  -> {"ok":true,"rev":"3",...}
+# 1) Güvenli protokol çalışıyor mu?  -> {"ok":true,"rev":"6",...}
 curl -s -X POST "$URL" -H 'Content-Type: text/plain' \
   -d "{\"action\":\"ping\",\"token\":\"$TOKEN\"}"
 
@@ -71,7 +71,7 @@ Beklenen: 1 ve 2 `ok:true`, 3 `method_not_allowed`, 4 `unauthorized`.
 1. Uygulama → **⚙️ Ayarlar → ☁️ Drive Senkron**
 2. **URL** + **aynı gizli kelime** → **Kaydet**
 3. **📡 Test** → şu iki satırı görmelisin:
-   - `✓ Güvenli protokol çalışıyor (script rev 3, ...)`
+   - `✓ Güvenli protokol çalışıyor (script rev 6, ...)`
    - `✓ URL'de token yolu kapalı (güvenli)`
 
 ## Sorun giderme

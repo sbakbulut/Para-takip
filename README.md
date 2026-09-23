@@ -4,7 +4,15 @@ Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`)
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
 - **Sürüm:** `v12.2` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
-- **Testler:** `npm ci && npm test` — 225 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+- **Testler:** `npm ci && npm test` — 240 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+
+## Güvenlik sertleştirmesi (v12.3)
+
+- Finans verileri cihazda ve Drive senkronunda AES-GCM-256 ile şifreli kasa zarflarında tutulur; anahtar PBKDF2-SHA-256 ile en az 12 karakterlik kasa parolasından türetilir.
+- İlk gerçek kayıtta kasa parolası istenir. Parola unutulursa veriler kurtarılamaz; parola uygulamaya veya repoya yazılmaz.
+- Uzak cihazda ilk senkron açılışında aynı kasa parolası istenir. Yanlış parola veya değiştirilmiş veri reddedilir.
+- Drive URL'si yalnızca HTTPS Google Apps Script `/exec` adreslerini kabul eder; Apps Script protokolü rev **6**'dır ve hız limiti yalnızca başarılı kimlik doğrulamalı istekleri sayar.
+- API anahtarları ayrı ayardır; bunlar cihaz depolamasında tutulur. Daha güvenli kullanım için oturum modunu veya Apps Script proxy'sini tercih et.
 
 ## v12.2 — Test altyapısı + CI (ve README'nin gerçekle hizalanması)
 
@@ -33,12 +41,12 @@ Bu sürüm **uygulama davranışını değiştirmez**; deponun doğrulanabilirli
 
 ```
 $ npm test
-== test.js:      ALL PASS  85/85
-== test-sync.js: ALL PASS  53/53
+== test.js:      ALL PASS  89/89
+== test-sync.js: ALL PASS  64/64
 == test-jev.js:  ALL PASS  85/85
 == test-runner.js: ALL PASS  2/2
 
-TAMAMI GECTI — 225 kontrol, 0 hata
+TAMAMI GECTI — 240 kontrol, 0 hata
 ```
 
 ## v12.1 — Jev düzeltmesi: doğru uç nokta + doğrulanmış model slug'ı
@@ -53,9 +61,9 @@ her seferinde sessizce yerel çekirdeğe düşüyordu (`📡 Test` kırmızı). 
 | 1 | **Yanlış uç:** `/api/v1/systemone` (yok) | Doğru uç: **`https://openrouter.ai/api/alpha/decisions`**. Jev bir **decisions** modelidir; OpenRouter'ın kendi hatası bunu söyler: *"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead."* |
 | 2 | **Varsayılan model yok:** `typesafe/jev-latest` | Varsayılan **`typesafe/jev-1.13`** (canlı doğrulandı); yedek zinciri artık yalnızca **var olan** slug'lar: `typesafe/jev-1.13-20260917 → jev-1.13` |
 | 3 | TypeSafe doğrudan sağlayıcının modeli `jev-1.13` | Resmî dokümanla uyumlu **`jev-latest`** (yedek: `jev-1.13`) |
-| 4 | Proxy beyaz listesi (`gas/Code.gs`) aynı yanlış adresi taşıyordu | Proxy de `/api/alpha/decisions`'a gider; `SCRIPT_REV` **5** |
+| 4 | Proxy beyaz listesi (`gas/Code.gs`) aynı yanlış adresi taşıyordu | Proxy de `/api/alpha/decisions`'a gider; `SCRIPT_REV` **6** |
 | 5 | Öz-test eski (yanlış) ucu doğruluyordu | Self-test yeni ucu, "chat/completions **değil**" kuralını ve tüm slug'ların desen denetimini doğrular |
-| 6 | Ayar ekranındaki proxy ipucu "rev 4" diyordu | "rev 5" |
+| 6 | Ayar ekranındaki proxy ipucu "rev 4" diyordu | "rev 6" |
 
 ### Canlı doğrulama (gerçek OpenRouter anahtarıyla, v12.1)
 
@@ -70,7 +78,7 @@ her seferinde sessizce yerel çekirdeğe düşüyordu (`📡 Test` kırmızı). 
 | **🧪 Yerel çekirdek testi** | tümü yeşil | ✅ (yeni provider/uç kontrolleri dahil) |
 
 > **Not:** Tarayıcı CORS'u açık olduğu için **Taşıma = doğrudan** yeterlidir; Apps Script proxy'si yalnızca
-> anahtarı istemciden uzak tutmak isteyenler için opsiyoneldir (proxy kullanıyorsan `gas/Code.gs` rev 5'i yayınla).
+> anahtarı istemciden uzak tutmak isteyenler için opsiyoneldir (proxy kullanıyorsan `gas/Code.gs` rev 6'yı yayınla).
 
 ## v12.0 — Hibrit yapay zekâ: DeepSeek (System 2) + Jev (System 1)
 
@@ -205,13 +213,13 @@ Ayarlar'daki **Son çağrı** satırı son denemenin kodunu, HTTP durumunu, ipuc
 
 | Kod / ipucu | Anlamı | Ne yapmalı |
 |---|---|---|
-| `network` + `cors_or_blocked` | Tarayıcı isteği engelledi (CORS) | Taşıma → **Apps Script proxy** (+ `Code.gs` rev 5 yayınla) |
+| `network` + `cors_or_blocked` | Tarayıcı isteği engelledi (CORS) | Taşıma → **Apps Script proxy** (+ `Code.gs` rev 6 yayınla) |
 | `network` + `offline` | Gerçekten çevrimdışısın | Bağlantı gelince tekrar dene |
 | `unauthorized` + `key` | Anahtar reddedildi (401/403) | openrouter.ai/keys'ten yeni anahtar |
 | `http_error` + `model_not_found` | Model slug'ı yok (400) | Model alanına geçerli slug yaz (`typesafe/jev-1.13`) — yedek zinciri zaten otomatik denedi |
 | `http_error` + `credits` | Kredi/limit yetersiz (402) | Panelden kredi veya anahtar limiti |
 | `http_error` + `rate` | Çok fazla istek (429) | Biraz bekleyip tekrar dene |
-| `gas_error` / `gas_proxy_not_configured` | Proxy kurulu değil | Drive Senkron URL+token gir, rev 5'i yayınla |
+| `gas_error` / `gas_proxy_not_configured` | Proxy kurulu değil | Drive Senkron URL+token gir, rev 6'yı yayınla |
 | `bad_json` | Yanıt okunamadı | Genelde geçici; yerel karar devrede kalır |
 | `timeout` | 6 sn içinde yanıt yok | Tekrar dene ya da `local` moda geç |
 

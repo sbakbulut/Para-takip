@@ -43,7 +43,7 @@ var PROP_RATE = "rate";
 var MIN_TOKEN_LEN = 16;
 var MAX_BYTES = 1000000;   // 1 MB
 var RATE_LIMIT = 60;       // istek / dakika
-var SCRIPT_REV = "5";      // protokol sürümü (uygulama bunu doğrular)
+var SCRIPT_REV = "6";      // protokol sürümü (uygulama bunu doğrular)
 /* Jev proxy: yalnizca bu iki adrese cikilir (SSRF kapali).
    Istemci "provider" alanini secer; URL istemciden ALINMAZ.
    OpenRouter'da Jev bir "decisions" modelidir: /chat/completions DEGIL,
@@ -84,14 +84,14 @@ function doPost(e) {
   var action = String(body.action || "put");
   if (["ping", "get", "put", "jev"].indexOf(action) === -1) return json({ ok: false, error: "bad_action" });
 
-  /* 3) Hız limiti */
-  if (rateLimited(props)) return json({ ok: false, error: "rate_limited" });
-
-  /* 4) Token: SADECE gövdeden */
+  /* 3) Token: SADECE gövdeden */
   var token = String(body.token || "");
   var stored = props.getProperty(PROP_TOKEN) || "";
   if (stored.length < MIN_TOKEN_LEN) return json({ ok: false, error: "server_token_missing" });
   if (!safeEqual(token, stored)) return json({ ok: false, error: "unauthorized" });
+
+  /* 4) Hız limiti yalnızca yetkili istemcileri sayar */
+  if (rateLimited(props)) return json({ ok: false, error: "rate_limited" });
 
   /* 5) İşlemler */
   if (action === "ping") {

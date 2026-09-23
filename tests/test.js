@@ -83,29 +83,44 @@ function jsonResponse(obj, status = 200) {
   s.eq("ini() sifir harcama", iniState.expenses.length, 0);
   s.eq("ini() 2 varsayilan borc", iniState.debts.length, 2);
 
-  /* ---------- 6) PIN: tuzlu SHA-256, dogrulama, kilit ---------- */
-  s.eq("PIN_MAX_TRIES 5", w.PIN_MAX_TRIES, 5);
-  s.eq("PIN_LOCK_MS 30 sn", w.PIN_LOCK_MS, 30000);
-  await w.pinSave("4321");
-  const rec = w.pinLookup();
-  s.ok("pinSave tuzlu sha256 bicimi", rec && rec.salt && rec.hash && !rec.plain && !rec.legacy);
-  s.ok("PIN duz metin saklanmiyor", JSON.stringify(rec).indexOf("4321") === -1);
-  s.true("dogru PIN geciyor", await w.pinVerify("4321"));
-  s.true("yanlis PIN gecmiyor", (await w.pinVerify("1234")) === false);
+  /* ---------- 6) Sifreli kasa kriptografisi ---------- */
+  const vaultPassphrase = "correct horse battery staple";
+  const encrypted = await w.vaultEncryptText("financial-state", vaultPassphrase);
+  s.true("kasa zarfi AES-GCM/PBKDF2 bicimini tasir", w.vaultIsEnvelope(encrypted));
+  s.ok("sifreli zarfta acik finans verisi yok", encrypted.indexOf("financial-state") === -1);
+  s.eq("kasa dogru parolayla cozulur", await w.vaultDecryptText(encrypted, vaultPassphrase), "financial-state");
+  let wrongPassRejected = false;
+  try { await w.vaultDecryptText(encrypted, "wrong passphrase"); } catch (e) { wrongPassRejected = true; }
+  s.true("yanlis parola reddedilir", wrongPassRejected);
+  const changedCiphertext = JSON.parse(encrypted);
+  changedCiphertext.ciphertext = (changedCiphertext.ciphertext[0] === "A" ? "B" : "A") + changedCiphertext.ciphertext.slice(1);
+  let tamperRejected = false;
+  try { await w.vaultDecryptText(JSON.stringify(changedCiphertext), vaultPassphrase); } catch (e) { tamperRejected = true; }
+  s.true("degistirilmis sifreli veri reddedilir", tamperRejected);
+  s.true("kisa kasa parolasi reddedilir", !w.vaultPassphraseIsValid("12345678"));
+  s.true("uzun kasa parolasi kabul edilir", w.vaultPassphraseIsValid(vaultPassphrase));
 
-  /* Eski duz metin PIN yukseltilebilir olmali (v10 uyumu) */
-  w.localStorage.setItem("pk_pin", "1234");
-  s.true("eski duz PIN tespit edilir", w.pinLookup().legacy === "1234");
-  s.true("eski duz PIN dogrulanir", await w.pinVerify("1234"));
-
-  /* 5 yanlis denemede 30 sn kilit */
-  w.localStorage.removeItem("pk_pin_lock");
-  for (let i = 0; i < 4; i++) w.pinRegisterFail();
-  s.eq("4 hatali denemede kilit yok", w.pinLockUntil(), 0);
-  w.pinRegisterFail();
-  s.ok("5. hatali denemede kilit acilir", w.pinLockUntil() > Date.now());
-  w.pinClearFails();
-  s.eq("pinClearFails kilidi kaldirir", w.pinLockUntil(), 0);
+  const wLegacy = await boot({ skipRenderWait: true });
+  const legacyState = { expenses: [{ id: "legacy-expense", amount: 1234, date: "2026-09-20", category: "food" }], _demo: false };
+  const legacyText = JSON.stringify(legacyState);
+  wLegacy.localStorage.setItem(wLegacy.KY, legacyText);
+  wLegacy.localStorage.setItem("pk_pin", "1234");
+  wLegacy.localStorage.setItem("pk_drive_snapshot", JSON.stringify({ ts: 1, by: "pull", data: legacyText }));
+  const migratedState = await wLegacy.vaultMigrateLegacy(vaultPassphrase);
+  const localEnvelope = wLegacy.localStorage.getItem(wLegacy.VAULT_STORAGE_KEY);
+  const migratedSnapshot = JSON.parse(wLegacy.localStorage.getItem("pk_drive_snapshot"));
+  s.eq("legacy kasa migration finans verisini korur", migratedState.expenses[0].id, "legacy-expense");
+  s.true("legacy plaintext ana kaydi migration sonrasi silinir", wLegacy.localStorage.getItem(wLegacy.KY) === null);
+  s.true("legacy PIN artigi silinir", wLegacy.localStorage.getItem("pk_pin") === null);
+  s.true("localStorage ana veri sifreli zarftir", wLegacy.vaultIsEnvelope(localEnvelope));
+  s.true("snapshot da sifreli zarfa donusur", !!(migratedSnapshot && migratedSnapshot.envelope && !migratedSnapshot.data));
+  const unlockedState = await wLegacy.vaultUnlockLocal(vaultPassphrase);
+  s.eq("sifreli kasa tekrar acilinca state korunur", unlockedState.expenses[0].id, "legacy-expense");
+  const wRemote = await boot({ skipRenderWait: true });
+  const remoteEnvelope = await wRemote.vaultEncryptText(legacyText, vaultPassphrase);
+  const remoteState = await wRemote.vaultUnlockRemote(remoteEnvelope, vaultPassphrase);
+  s.eq("uzak kasa dogru parolayla acilir", remoteState.expenses[0].id, "legacy-expense");
+  s.true("uzak kasa acilinca oturum anahtari kurulur", !!wRemote.VAULT_SESSION);
 
   /* ---------- 7) DeepSeek istek govdesi ---------- */
   let cap = null;

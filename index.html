@@ -767,6 +767,7 @@ async function jevHttp(bodyRaw){
       var url="",tok="";
       try{url=localStorage.getItem("pk_drive_url")||"";tok=localStorage.getItem("pk_drive_token")||""}catch(e){}
       if(!url||!tok)throw new Error("gas_proxy_not_configured");
+      if(!driveUrlIsAllowed(url))throw new Error("gas_proxy_invalid_url");
       var gopts={
         method:"POST",
         cache:"no-store",
@@ -2370,9 +2371,10 @@ tr:{
   annual_savings:"Yıllık Tasarruf",savings_rate:"Tasarruf Oranı",top_cat:"En Yüksek Kategori",
   debt_calc:"Geri Ödeme Tahmini",monthly_pay:"Aylık Ödeme",months_to_pay:"ay sonra kapanır",
   no_debt_remain:"Borç kalmadı!",
-  pin_protect:"PIN Koruması",set_pin:"PIN Belirle",enter_pin:"PIN Giriniz",
-  pin_label:"4 haneli PIN",pin_confirm:"PIN Tekrar",pin_mismatch:"PIN'ler uyuşmuyor",
-  pin_wrong:"Yanlış PIN!",pin_disable:"PIN Kaldır",pin_unlock:"Aç",
+  pin_protect:"Şifreli Kasa",set_pin:"Kasa Parolasını Değiştir",enter_pin:"Kasa Parolası",
+  pin_label:"En az 12 karakter",pin_confirm:"Parola Tekrar",pin_mismatch:"Parolalar uyuşmuyor",
+  pin_wrong:"Parola hatalı!",pin_disable:"Kasa verisini sil",pin_unlock:"Aç",
+  vault_short:"Kasa parolası en az 12 karakter olmalı.",vault_mismatch:"Parolalar uyuşmuyor.",vault_changed:"Kasa parolası değiştirildi.",vault_change_failed:"Kasa parolası değiştirilemedi.",
   notifications:"Bildirimler",notif_enable:"Bildirimleri Etkinleştir",
   notif_enabled:"✓ Bildirimler Açık",notif_perm:"İzin alınamadı",
   drive_sync:"☁️ Drive Senkron",drive_url_ph:"Apps Script Web App URL'i",
@@ -2430,9 +2432,10 @@ en:{
   annual_savings:"Annual Savings",savings_rate:"Savings Rate",top_cat:"Top Category",
   debt_calc:"Payoff Estimate",monthly_pay:"Monthly Payment",months_to_pay:"months to payoff",
   no_debt_remain:"No remaining debt!",
-  pin_protect:"PIN Protection",set_pin:"Set PIN",enter_pin:"Enter PIN",
-  pin_label:"4-digit PIN",pin_confirm:"Confirm PIN",pin_mismatch:"PINs don't match",
-  pin_wrong:"Wrong PIN!",pin_disable:"Remove PIN",pin_unlock:"Unlock",
+  pin_protect:"Encrypted Vault",set_pin:"Change Vault Passphrase",enter_pin:"Vault Passphrase",
+  pin_label:"At least 12 characters",pin_confirm:"Confirm passphrase",pin_mismatch:"Passphrases do not match",
+  pin_wrong:"Wrong passphrase",pin_disable:"Delete vault data",pin_unlock:"Unlock",
+  vault_short:"Vault passphrase must be at least 12 characters.",vault_mismatch:"Passphrases do not match.",vault_changed:"Vault passphrase changed.",vault_change_failed:"Could not change vault passphrase.",
   notifications:"Notifications",notif_enable:"Enable Notifications",
   notif_enabled:"✓ Notifications On",notif_perm:"Permission denied",
   drive_sync:"☁️ Drive Sync",drive_url_ph:"Apps Script Web App URL",
@@ -2484,88 +2487,6 @@ function parseNum(input){
   return isNaN(v)?NaN:v;
 }
 
-/* ============================================================
-   PIN GUVENLIGI — duz metin PIN yerine tuzlu SHA-256 ozeti
-   Eski (duz metin) PIN ilk basarili girişte otomatik olarak
-   ozetli bicime yukseltilir. Guvensiz baglam (http/file://)
-   icin sifreleme yoksa geri donus olarak "plain:" bicimi.
-   ============================================================ */
-var PIN_KEY="pk_pin";
-var PIN_LOCK_KEY="pk_pin_lock";
-var PIN_MAX_TRIES=5;
-var PIN_LOCK_MS=30000;
-
-function pinLookup(){
-  try{
-    var s=localStorage.getItem(PIN_KEY);
-    if(!s)return null;
-    if(/^\d{4}$/.test(s))return{legacy:s}; /* v10 ve oncesi duz metin PIN */
-    var p=s.split(":");
-    if(p.length===3&&p[0]==="sha256"&&p[1]&&p[2])return{salt:p[1],hash:p[2]};
-    if(p.length===3&&p[0]==="plain"&&p[2])return{plain:p[2]};
-  }catch(e){}
-  return null;
-}
-function pinIsSet(){try{return !!localStorage.getItem(PIN_KEY)}catch(e){return false}}
-function pinRandomSalt(){
-  try{
-    var a=new Uint8Array(8);
-    if(typeof crypto!=="undefined"&&crypto.getRandomValues)crypto.getRandomValues(a);
-    else for(var i=0;i<a.length;i++)a[i]=Math.floor(Math.random()*256);
-    return Array.prototype.map.call(a,function(b){return ("0"+b.toString(16)).slice(-2)}).join("");
-  }catch(e){return String(Date.now())}
-}
-function pinSha256(text){
-  try{
-    if(typeof crypto!=="undefined"&&crypto.subtle&&crypto.subtle.digest&&typeof TextEncoder!=="undefined"){
-      return crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)).then(function(buf){
-        return Array.prototype.map.call(new Uint8Array(buf),function(b){return ("0"+b.toString(16)).slice(-2)}).join("");
-      });
-    }
-  }catch(e){}
-  return Promise.resolve(null);
-}
-function pinSave(pin){
-  var salt=pinRandomSalt();
-  return pinSha256(salt+":"+pin).then(function(hash){
-    try{
-      if(hash)localStorage.setItem(PIN_KEY,"sha256:"+salt+":"+hash);
-      else localStorage.setItem(PIN_KEY,"plain:"+salt+":"+pin);
-      return true;
-    }catch(e){return false}
-  });
-}
-function pinVerify(pin){
-  var rec=pinLookup();
-  if(!rec)return Promise.resolve(false);
-  if(rec.legacy)return Promise.resolve(String(pin)===rec.legacy);
-  if(rec.plain)return Promise.resolve(String(pin)===rec.plain);
-  if(rec.salt&&rec.hash)return pinSha256(rec.salt+":"+pin).then(function(hash){
-    if(!hash)return false;
-    return hash===rec.hash;
-  });
-  return Promise.resolve(false);
-}
-function pinLockUntil(){
-  try{
-    var s=JSON.parse(localStorage.getItem(PIN_LOCK_KEY)||"null");
-    if(s&&s.until&&s.until>Date.now())return s.until;
-  }catch(e){}
-  return 0;
-}
-function pinRegisterFail(){
-  var tries=0;
-  try{
-    var s=JSON.parse(localStorage.getItem(PIN_LOCK_KEY)||"null");
-    if(s&&s.tries)tries=s.tries;
-  }catch(e){}
-  tries=tries+1;
-  var out={tries:tries,until:0};
-  if(tries>=PIN_MAX_TRIES)out={tries:0,until:Date.now()+PIN_LOCK_MS};
-  try{localStorage.setItem(PIN_LOCK_KEY,JSON.stringify(out))}catch(e){}
-  return out;
-}
-function pinClearFails(){try{localStorage.removeItem(PIN_LOCK_KEY)}catch(e){}}
 function mkk(y,m){return y+"-"+String(m+1).padStart(2,"0")}
 function tdy(){
   /* Yerel tarihi döndür (UTC değil) — timezone farkından etkilenmez */
@@ -2579,8 +2500,182 @@ function dueDateForMonth(y,m,day){var maxDay=new Date(y,m+1,0).getDate();var due
 function dueDateForMonthKey(mk,day){var p=mk.split("-");return dueDateForMonth(+p[0],+p[1]-1,day)}
 function prd(s){var p=s.split("-");return{y:+p[0],m:+p[1]-1,d:+p[2]}}
 function ini(){var _l=localStorage.getItem("pk_lang")||"tr";var _dc=_l==="tr"?DC:DC_EN;var _t=T[_l]||T.tr;return{expenses:[],incomes:{},incomeEntries:[],debts:[{id:"kart",label:_t.debt_default1,icon:"💳",total:0,paid:0,payments:[]},{id:"kredi",label:_t.debt_default2,icon:"🏦",total:0,paid:0,payments:[]}],budgets:{},categories:_dc.map(function(c){return Object.assign({},c)}),templates:[],recurring:[],savings:{goal:0,label:_t.savings_label},budgetProfiles:[],jevAnomalies:[],jevMeta:{scanTs:0,seen:[]}}}
-function ld(){try{var d=localStorage.getItem(KY);return d?JSON.parse(d):sampleDemo()}catch(e){return sampleDemo()}}
-function sv(d){try{localStorage.setItem(KY,JSON.stringify(d))}catch(e){}}
+var __pkInitialState=null;
+function ld(){
+  if(__pkInitialState)return JSON.parse(JSON.stringify(__pkInitialState));
+  try{var d=localStorage.getItem(KY);return d?JSON.parse(d):sampleDemo()}catch(e){return sampleDemo()}
+}
+async function sv(d){
+  var session=VAULT_SESSION;
+  if(d&&d._demo)return false;
+  if(!session){
+    var pass=window.prompt("Finans verilerini korumak için en az 12 karakterlik kasa parolası belirle:");
+    if(!vaultPassphraseIsValid(pass))return false;
+    var firstEnvelope=await vaultEncryptText(JSON.stringify(d),pass),firstParsed=vaultParseEnvelope(firstEnvelope);
+    var firstSalt=vaultDecodeBytes(firstParsed.salt),firstKey=await vaultDeriveKey(pass,firstSalt);
+    if(await vaultDecryptWithKey(firstEnvelope,firstKey)!==JSON.stringify(d))return false;
+    localStorage.setItem(VAULT_STORAGE_KEY,firstEnvelope);
+    if(localStorage.getItem(VAULT_STORAGE_KEY)!==firstEnvelope)return false;
+    VAULT_SESSION={key:firstKey,salt:firstSalt};
+    localStorage.removeItem(KY);localStorage.removeItem("pk_pin");localStorage.removeItem("pk_pin_lock");
+    return true;
+  }
+  try{
+    var envelope=await vaultEncryptWithKey(JSON.stringify(d),session.key,session.salt);
+    if(VAULT_SESSION!==session)return false;
+    localStorage.setItem(VAULT_STORAGE_KEY,envelope);
+    return localStorage.getItem(VAULT_STORAGE_KEY)===envelope;
+  }catch(e){return false}
+}
+
+var VAULT_STORAGE_KEY="pk_vault_v1";
+var VAULT_PBKDF2_ITERATIONS=600000;
+var VAULT_MIN_PASSPHRASE_LENGTH=12;
+var VAULT_MAX_ENVELOPE_BYTES=1400000;
+var VAULT_SESSION=null;
+var VAULT_AAD="para-kontrol-vault-v1";
+
+function vaultPassphraseIsValid(passphrase){return typeof passphrase==="string"&&passphrase.length>=VAULT_MIN_PASSPHRASE_LENGTH}
+function vaultCryptoAvailable(){return typeof crypto!=="undefined"&&crypto.subtle&&crypto.getRandomValues&&typeof TextEncoder!=="undefined"&&typeof TextDecoder!=="undefined"&&typeof btoa==="function"&&typeof atob==="function"}
+function vaultEncodeBytes(bytes){
+  var binary="";
+  for(var i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));
+  return btoa(binary);
+}
+function vaultDecodeBytes(value){
+  if(typeof value!=="string"||!/^[A-Za-z0-9+/]*={0,2}$/.test(value))throw new Error("vault_bad_envelope");
+  var binary=atob(value),bytes=new Uint8Array(binary.length);
+  for(var i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+  return bytes;
+}
+function vaultParseEnvelope(value){
+  var envelope=value;
+  try{if(typeof value==="string")envelope=JSON.parse(value)}catch(e){return null}
+  if(!envelope||typeof envelope!=="object"||Array.isArray(envelope)||envelope.version!==1||
+    envelope.kdf!=="PBKDF2-SHA-256"||envelope.iterations!==VAULT_PBKDF2_ITERATIONS||envelope.cipher!=="AES-GCM-256")return null;
+  try{
+    var salt=vaultDecodeBytes(envelope.salt),iv=vaultDecodeBytes(envelope.iv),ciphertext=vaultDecodeBytes(envelope.ciphertext);
+    if(salt.length!==16||iv.length!==12||ciphertext.length<16||ciphertext.length>VAULT_MAX_ENVELOPE_BYTES)return null;
+  }catch(e){return null}
+  return envelope;
+}
+function vaultIsEnvelope(value){return !!vaultParseEnvelope(value)}
+async function vaultDeriveKey(passphrase,salt){
+  if(!vaultCryptoAvailable())throw new Error("vault_crypto_unavailable");
+  var material=await crypto.subtle.importKey("raw",new TextEncoder().encode(passphrase),"PBKDF2",false,["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt:salt,iterations:VAULT_PBKDF2_ITERATIONS,hash:"SHA-256"},material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function vaultEncryptWithKey(plainText,key,salt){
+  if(!vaultCryptoAvailable())throw new Error("vault_crypto_unavailable");
+  var iv=new Uint8Array(12);crypto.getRandomValues(iv);
+  var encrypted=await crypto.subtle.encrypt({name:"AES-GCM",iv:iv,additionalData:new TextEncoder().encode(VAULT_AAD)},key,new TextEncoder().encode(String(plainText)));
+  return JSON.stringify({version:1,kdf:"PBKDF2-SHA-256",iterations:VAULT_PBKDF2_ITERATIONS,cipher:"AES-GCM-256",salt:vaultEncodeBytes(salt),iv:vaultEncodeBytes(iv),ciphertext:vaultEncodeBytes(new Uint8Array(encrypted))});
+}
+async function vaultEncryptText(plainText,passphrase){
+  if(!vaultPassphraseIsValid(passphrase))throw new Error("vault_weak_passphrase");
+  var salt=new Uint8Array(16);crypto.getRandomValues(salt);
+  var key=await vaultDeriveKey(passphrase,salt);
+  return vaultEncryptWithKey(plainText,key,salt);
+}
+async function vaultDecryptWithKey(value,key){
+  var envelope=vaultParseEnvelope(value);
+  if(!envelope)throw new Error("vault_bad_envelope");
+  try{
+    var clear=await crypto.subtle.decrypt({name:"AES-GCM",iv:vaultDecodeBytes(envelope.iv),additionalData:new TextEncoder().encode(VAULT_AAD)},key,vaultDecodeBytes(envelope.ciphertext));
+    return new TextDecoder().decode(clear);
+  }catch(e){throw new Error("vault_authentication_failed")}
+}
+async function vaultDecryptText(value,passphrase){
+  var envelope=vaultParseEnvelope(value);
+  if(!envelope)throw new Error("vault_bad_envelope");
+  var key=await vaultDeriveKey(passphrase,vaultDecodeBytes(envelope.salt));
+  return vaultDecryptWithKey(envelope,key);
+}
+async function vaultMigrateSnapshot(key,salt){
+  var snap=null;
+  try{snap=JSON.parse(localStorage.getItem(DRIVE_SNAPSHOT_KEY)||"null")}catch(e){}
+  if(!snap||typeof snap.data!=="string")return;
+  var encrypted=await vaultEncryptWithKey(snap.data,key,salt);
+  if(await vaultDecryptWithKey(encrypted,key)!==snap.data)throw new Error("vault_snapshot_verify_failed");
+  var value=JSON.stringify({ts:snap.ts||Date.now(),by:snap.by||"pull",envelope:encrypted});
+  localStorage.setItem(DRIVE_SNAPSHOT_KEY,value);
+  if(localStorage.getItem(DRIVE_SNAPSHOT_KEY)!==value)throw new Error("vault_snapshot_store_failed");
+}
+async function vaultMigrateLegacy(passphrase){
+  if(!vaultPassphraseIsValid(passphrase))throw new Error("vault_weak_passphrase");
+  var raw=localStorage.getItem(KY),state;
+  try{state=raw?JSON.parse(raw):sampleDemo()}catch(e){throw new Error("vault_legacy_data_invalid")}
+  if(!state||typeof state!=="object"||Array.isArray(state))throw new Error("vault_legacy_data_invalid");
+  var envelope=await vaultEncryptText(JSON.stringify(state),passphrase);
+  var parsed=vaultParseEnvelope(envelope),salt=vaultDecodeBytes(parsed.salt),key=await vaultDeriveKey(passphrase,salt);
+  if(await vaultDecryptWithKey(envelope,key)!==JSON.stringify(state))throw new Error("vault_verify_failed");
+  await vaultMigrateSnapshot(key,salt);
+  localStorage.setItem(VAULT_STORAGE_KEY,envelope);
+  var stored=localStorage.getItem(VAULT_STORAGE_KEY);
+  if(stored!==envelope||await vaultDecryptWithKey(stored,key)!==JSON.stringify(state))throw new Error("vault_store_verify_failed");
+  VAULT_SESSION={key:key,salt:salt};
+  __pkInitialState=state;
+  localStorage.removeItem(KY);
+  localStorage.removeItem("pk_pin");
+  localStorage.removeItem("pk_pin_lock");
+  return state;
+}
+async function vaultUnlockLocal(passphrase){
+  var stored=localStorage.getItem(VAULT_STORAGE_KEY),envelope=vaultParseEnvelope(stored);
+  if(!envelope)throw new Error("vault_missing_or_invalid");
+  var salt=vaultDecodeBytes(envelope.salt),key=await vaultDeriveKey(passphrase,salt);
+  var clear=await vaultDecryptWithKey(envelope,key),state;
+  try{state=JSON.parse(clear)}catch(e){throw new Error("vault_state_invalid")}
+  if(!state||typeof state!=="object"||Array.isArray(state))throw new Error("vault_state_invalid");
+  await vaultMigrateSnapshot(key,salt);
+  VAULT_SESSION={key:key,salt:salt};
+  __pkInitialState=state;
+  localStorage.removeItem(KY);
+  localStorage.removeItem("pk_pin");
+  localStorage.removeItem("pk_pin_lock");
+  return state;
+}
+async function vaultUnlockRemote(value,passphrase){
+  var envelope=vaultParseEnvelope(value);
+  if(!envelope)throw new Error("vault_bad_envelope");
+  var salt=vaultDecodeBytes(envelope.salt),key=await vaultDeriveKey(passphrase,salt),clear=await vaultDecryptWithKey(envelope,key);
+  var state;
+  try{state=JSON.parse(clear)}catch(e){throw new Error("vault_state_invalid")}
+  if(!state||typeof state!=="object"||Array.isArray(state))throw new Error("vault_state_invalid");
+  VAULT_SESSION={key:key,salt:salt};
+  __pkInitialState=state;
+  return state;
+}
+async function vaultChangePassphraseForState(state,passphrase){
+  if(!VAULT_SESSION)throw new Error("vault_locked");
+  if(!vaultPassphraseIsValid(passphrase))throw new Error("vault_weak_passphrase");
+  var previousSession=VAULT_SESSION,newSalt=new Uint8Array(16);
+  crypto.getRandomValues(newSalt);
+  var newKey=await vaultDeriveKey(passphrase,newSalt),stateText=JSON.stringify(state);
+  var newEnvelope=await vaultEncryptWithKey(stateText,newKey,newSalt);
+  if(await vaultDecryptWithKey(newEnvelope,newKey)!==stateText)throw new Error("vault_verify_failed");
+  var oldSnapshot=null,newSnapshotText="";
+  try{oldSnapshot=JSON.parse(localStorage.getItem(DRIVE_SNAPSHOT_KEY)||"null")}catch(e){}
+  if(oldSnapshot){
+    var snapshotText=typeof oldSnapshot.envelope==="string"?await vaultDecryptWithKey(oldSnapshot.envelope,previousSession.key):String(oldSnapshot.data||"");
+    if(snapshotText){
+      var newSnapshotEnvelope=await vaultEncryptWithKey(snapshotText,newKey,newSalt);
+      if(await vaultDecryptWithKey(newSnapshotEnvelope,newKey)!==snapshotText)throw new Error("vault_snapshot_verify_failed");
+      newSnapshotText=JSON.stringify({ts:oldSnapshot.ts||Date.now(),by:oldSnapshot.by||"pull",envelope:newSnapshotEnvelope});
+    }
+  }
+  localStorage.setItem(VAULT_STORAGE_KEY,newEnvelope);
+  if(localStorage.getItem(VAULT_STORAGE_KEY)!==newEnvelope||await vaultDecryptWithKey(localStorage.getItem(VAULT_STORAGE_KEY),newKey)!==stateText)throw new Error("vault_store_verify_failed");
+  VAULT_SESSION={key:newKey,salt:newSalt};
+  __pkInitialState=state;
+  if(newSnapshotText){
+    try{localStorage.setItem(DRIVE_SNAPSHOT_KEY,newSnapshotText)}catch(e){localStorage.removeItem(DRIVE_SNAPSHOT_KEY)}
+  }else localStorage.removeItem(DRIVE_SNAPSHOT_KEY);
+  localStorage.removeItem(KY);
+  localStorage.removeItem("pk_pin");
+  localStorage.removeItem("pk_pin_lock");
+  return true;
+}
 
 function _driveEnabled(){
   try{return!!(localStorage.getItem("pk_drive_url")&&localStorage.getItem("pk_drive_token"))}catch(e){return false}
@@ -2595,6 +2690,16 @@ var DRIVE_LIMIT_BYTES=1000000;            /* 1 MB */
 var DRIVE_SNAPSHOT_KEY="pk_drive_snapshot";
 var DRIVE_MIN_TOKEN_LEN=16;
 
+function driveUrlIsAllowed(value){
+  var raw=String(value||"").trim();
+  if(!raw||/[?#]/.test(raw))return false;
+  try{
+    var url=new URL(raw);
+    return url.protocol==="https:"&&url.hostname==="script.google.com"&&url.origin==="https://script.google.com"&&
+      !url.username&&!url.password&&!url.search&&!url.hash&&/^\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url.pathname);
+  }catch(e){return false}
+}
+
 function driveUrlFor(){
   try{return localStorage.getItem("pk_drive_url")||""}catch(e){return ""}
 }
@@ -2608,8 +2713,10 @@ function driveBody(extra){
 }
 /* Tek giris noktasi: her zaman POST + token govdede */
 function drivePost(action,extra){
+  var url=driveUrlFor();
+  if(!driveUrlIsAllowed(url))throw new Error("invalid_drive_url");
   var payload=Object.assign({action:action},extra||{});
-  return fetch(driveUrlFor(),{
+  return fetch(url,{
     method:"POST",
     cache:"no-store",
     headers:{"Content-Type":"text/plain;charset=utf-8"},
@@ -2957,25 +3064,10 @@ function App(){
   var fileRef=ur(null);
   var csvImportRef=ur(null);
   var undoTimerRef=ur(null);
-  var _pinLocked=h(pinIsSet),pinLocked=_pinLocked[0],setPinLocked=_pinLocked[1];
-  var _pinInput=h(""),pinInput=_pinInput[0],setPinInput=_pinInput[1];
-  var _pinWrong=h(false),pinWrong=_pinWrong[0],setPinWrong=_pinWrong[1];
-  /* Cok fazla yanlis denemede bekleme suresi (saniye) */
-  var _pinCd=h(0),pinCd=_pinCd[0],setPinCd=_pinCd[1];
-  ef(function(){
-    var until=pinLockUntil();
-    if(!until){setPinCd(0);return}
-    setPinCd(Math.max(1,Math.ceil((until-Date.now())/1000)));
-    var iv=setInterval(function(){
-      var left=Math.ceil((until-Date.now())/1000);
-      if(left<=0){clearInterval(iv);setPinCd(0);pinClearFails()}
-      else setPinCd(left);
-    },1000);
-    return function(){clearInterval(iv)};
-  },[]);
-  var _showPinSet=h(false),showPinSet=_showPinSet[0],setShowPinSet=_showPinSet[1];
-  var _pin1=h(""),pin1=_pin1[0],setPin1=_pin1[1];
-  var _pin2=h(""),pin2=_pin2[0],setPin2=_pin2[1];
+  var _showVaultChange=h(false),showVaultChange=_showVaultChange[0],setShowVaultChange=_showVaultChange[1];
+  var _vaultPass1=h(""),vaultPass1=_vaultPass1[0],setVaultPass1=_vaultPass1[1];
+  var _vaultPass2=h(""),vaultPass2=_vaultPass2[0],setVaultPass2=_vaultPass2[1];
+  var _vaultBusy=h(false),vaultBusy=_vaultBusy[0],setVaultBusy=_vaultBusy[1];
   var _notifOn=h(function(){return localStorage.getItem("pk_notif")==="1"}),notifOn=_notifOn[0],setNotifOn=_notifOn[1];
   /* ==== Drive Sync state'leri ==== */
   var _driveUrl=h(function(){try{return localStorage.getItem("pk_drive_url")||""}catch(e){return""}}),driveUrl=_driveUrl[0],setDriveUrl=_driveUrl[1];
@@ -3014,11 +3106,17 @@ function App(){
   var _driveBooted=false;
 
   /* Uygulamadan once yerel anlik goruntu (geri donus icin) */
-  function driveSnapshotSave(state,by){
-    try{localStorage.setItem(DRIVE_SNAPSHOT_KEY,JSON.stringify({ts:Date.now(),by:by||"pull",data:JSON.stringify(state)}))}catch(e){}
+  async function driveSnapshotSave(state,by){
+    if(!VAULT_SESSION)return false;
+    try{
+      var envelope=await vaultEncryptWithKey(JSON.stringify(state),VAULT_SESSION.key,VAULT_SESSION.salt);
+      var value=JSON.stringify({ts:Date.now(),by:by||"pull",envelope:envelope});
+      localStorage.setItem(DRIVE_SNAPSHOT_KEY,value);
+      return localStorage.getItem(DRIVE_SNAPSHOT_KEY)===value;
+    }catch(e){return false}
   }
-  function applyRemote(state){
-    driveSnapshotSave(S,"pull");
+  async function applyRemote(state){
+    await driveSnapshotSave(S,"pull");
     if(state._demo)delete state._demo;
     setS(state);
   }
@@ -3042,8 +3140,21 @@ function App(){
         setSyncStatus("error");return false;
       }
       if(json.ok&&typeof json.data==="string"&&json.data){
+        var remoteText=json.data;
+        if(vaultIsEnvelope(remoteText)){
+          var remoteEnvelope=vaultParseEnvelope(remoteText);
+          var sameSalt=VAULT_SESSION&&remoteEnvelope&&vaultEncodeBytes(VAULT_SESSION.salt)===remoteEnvelope.salt;
+          if(!sameSalt){
+            var remotePass=window.prompt(lang==="tr"?"Uzak kasa verisini açmak için kasa parolanı gir:":"Enter the vault passphrase to open remote data:");
+            if(!remotePass)throw new Error("vault_remote_unlock_cancelled");
+            var remoteState=await vaultUnlockRemote(remoteText,remotePass);
+            remoteText=JSON.stringify(remoteState);
+          }else{
+            remoteText=await vaultDecryptWithKey(remoteText,VAULT_SESSION.key);
+          }
+        }
         var parsed=null;
-        try{parsed=JSON.parse(json.data)}catch(e){parsed=null}
+        try{parsed=JSON.parse(remoteText)}catch(e){parsed=null}
         var clean=parsed?sanitizeRemote(parsed):null;
         if(!clean){
           setSyncStatus("error");
@@ -3060,7 +3171,7 @@ function App(){
           driveNoticeText((lang==="tr"?"Uzaktaki veri boş/çok küçük görünüyor":"Remote data looks empty/too small")+" ("+why+"). "+(lang==="tr"?"Yerel verin korundu; ne yapmak istediğini seç.":"Local data kept; choose what to do."));
           return false;
         }
-        applyRemote(clean.state);
+        await applyRemote(clean.state);
         setLastSyncTs(Date.now());
         setSyncStatus("ok");
         return true;
@@ -3097,7 +3208,8 @@ function App(){
   async function drivePush(){
     if(!_driveEnabled())return;
     if(S._demo){driveNoticeText(lang==="tr"?"Demo veriler Drive'a gönderilmez.":"Demo data is not pushed to Drive.");return}
-    var payload=JSON.stringify(S);
+    if(!VAULT_SESSION){setSyncStatus("error");return}
+    var payload=await vaultEncryptWithKey(JSON.stringify(S),VAULT_SESSION.key,VAULT_SESSION.salt);
     if(payload.length>DRIVE_LIMIT_BYTES){
       setSyncStatus("error");
       driveNoticeText(lang==="tr"?"Veri 1 MB sınırını aşıyor — gönderilmedi.":"Data exceeds the 1 MB limit — not sent.");
@@ -3153,12 +3265,13 @@ function App(){
     drivePush();
   }
   /* Uygulamadan onceki yerel anlik goruntuye don */
-  function driveRestoreSnapshot(){
+  async function driveRestoreSnapshot(){
     var snap=null;
     try{snap=JSON.parse(localStorage.getItem(DRIVE_SNAPSHOT_KEY)||"null")}catch(e){}
     if(!snap||!snap.data){driveNoticeText(lang==="tr"?"Geri dönülecek anlık görüntü yok.":"No snapshot to restore.");return}
+    var snapshotText=snap.envelope&&VAULT_SESSION?await vaultDecryptWithKey(snap.envelope,VAULT_SESSION.key):(snap.data||"");
     var parsed=null;
-    try{parsed=JSON.parse(snap.data)}catch(e){}
+    try{parsed=JSON.parse(snapshotText)}catch(e){}
     var clean=parsed?sanitizeRemote(parsed):null;
     if(!clean){driveNoticeText(lang==="tr"?"Anlık görüntü okunamadı.":"Snapshot unreadable.");return}
     setS(clean.state);
@@ -3168,6 +3281,12 @@ function App(){
   }
 
   function driveSaveConfig(url,token){
+    url=String(url||"").trim();
+    token=String(token||"").trim();
+    if(!driveUrlIsAllowed(url)){
+      driveNoticeText(lang==="tr"?"Yalnızca HTTPS Google Apps Script /exec adresi kabul edilir.":"Only HTTPS Google Apps Script /exec URLs are accepted.");
+      return false;
+    }
     try{
       localStorage.setItem("pk_drive_url",url);
       localStorage.setItem("pk_drive_token",token);
@@ -4572,7 +4691,7 @@ function App(){
         ${(jevLastTest.hint==="key")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Anahtar reddedildi. openrouter.ai/keys adresinden yeni bir anahtar oluşturup tekrar dene.":"Key rejected. Create a fresh key at openrouter.ai/keys and retry."}</div>`}
         ${(jevLastTest.hint==="credits")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Kredi/limit yetersiz. OpenRouter panelinden anahtara limit veya hesaba kredi ekle.":"Insufficient credits/limit. Add a key limit or account credits in the OpenRouter dashboard."}</div>`}
         ${(jevLastTest.hint==="offline")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Çevrimdışısın. Bağlantı gelince tekrar dene.":"You are offline. Retry once you are back online."}</div>`}
-        ${(jevLastTest.hint==="proxy")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Proxy kurulu değil. Önce Drive Senkron URL+token gir ve gas/Code.gs'in yeni sürümünü yayınla (rev 5).":"Proxy not set up. Fill Drive Sync URL+token and deploy the new gas/Code.gs (rev 5)."}</div>`}
+        ${(jevLastTest.hint==="proxy")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?"Proxy kurulu değil. Önce Drive Senkron URL+token gir ve gas/Code.gs'in yeni sürümünü yayınla (rev 6).":"Proxy not set up. Fill Drive Sync URL+token and deploy the new gas/Code.gs (rev 6)."}</div>`}
         ${(jevLastTest.hint==="model_not_found")&&html`<div style=${{fontSize:10,color:"var(--amber)",lineHeight:1.55,borderTop:"1px solid var(--border)",paddingTop:6}}>💡 ${lang==="tr"?("Model slug'i yok. Yukarıdaki Model alanına geçerli bir slug yaz (örn. typesafe/jev-1.13) ve Uygula'ya bas; yedek zinciri de denendi: "+(jevLastTest.modelTried||[]).join(" → ")):("Model slug missing. Enter a valid slug in the Model field above (e.g. typesafe/jev-1.13) and press Apply; the fallback chain was also tried: "+(jevLastTest.modelTried||[]).join(" → "))}</div>`}
       </div>`}
       ${last&&html`<div style=${{fontSize:9,color:"var(--dim)",lineHeight:1.5}}>${lang==="tr"?"Son çağrı: ":"Last call: "}${String(last.code||"ok")}${last.httpStatus?(" · HTTP "+last.httpStatus):""}${last.hint?(" · "+last.hint):""} · ${String(last.latencyMs||0)} ms${last.ok?"":(lang==="tr"?" (başarısız)":" (failed)")}${last.ts?(" · "+new Date(last.ts).toLocaleTimeString(lang==="tr"?"tr-TR":"en-US",{hour:"2-digit",minute:"2-digit"})):""}</div>`}
@@ -4698,40 +4817,18 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       return Object.assign({},p,{aiNotes:notes});
     });
   }
-  function pinCheck(digit){
-    if(pinCd>0)return;
-    if(pinLockUntil()>Date.now())return;
-    var next=pinInput+digit;
-    if(next.length>4)return;
-    setPinInput(next);
-    if(next.length<4)return;
-    pinVerify(next).then(function(ok){
-      if(ok){
-        pinClearFails();
-        /* Eski duz metin PIN ozetli bicime yukseltilir */
-        var rec=pinLookup();
-        if(rec&&rec.legacy)pinSave(next);
-        setPinLocked(false);setPinInput("");setPinWrong(false);setPinCd(0);
-      }else{
-        var st=pinRegisterFail();
-        setPinInput("");setPinWrong(true);
-        if(st.until&&st.until>Date.now()){
-          var left=Math.max(1,Math.ceil((st.until-Date.now())/1000));
-          setPinCd(left);
-        }
-        setTimeout(function(){setPinWrong(false)},700);
-      }
-    });
+  async function vaultChangePassphrase(){
+    if(!vaultPassphraseIsValid(vaultPass1)){alert(t("vault_short"));return}
+    if(vaultPass1!==vaultPass2){alert(t("vault_mismatch"));return}
+    setVaultBusy(true);
+    try{
+      await vaultChangePassphraseForState(S,vaultPass1);
+      setS(Object.assign({},S));
+      setVaultPass1("");setVaultPass2("");setShowVaultChange(false);
+      alert(t("vault_changed"));
+    }catch(e){alert(t("vault_change_failed"))}
+    finally{setVaultBusy(false)}
   }
-  function pinSetSave(){
-    if(pin1.length!==4||pin1!==pin2){alert(t("pin_mismatch"));return}
-    pinSave(pin1).then(function(ok){
-      if(!ok){alert(lang==="tr"?"PIN kaydedilemedi":"PIN could not be saved");return}
-      setShowPinSet(false);setPin1("");setPin2("");
-      alert(lang==="tr"?"PIN belirlendi":"PIN set successfully");
-    });
-  }
-  function pinRemove(){try{localStorage.removeItem(PIN_KEY)}catch(e){}try{localStorage.removeItem(PIN_LOCK_KEY)}catch(e){}setPinLocked(false);setShowPinSet(false)}
   function requestNotif(){if(!("Notification" in window)){alert(t("notif_perm"));return}Notification.requestPermission().then(function(perm){if(perm==="granted"){setNotifOn(true)}else{alert(t("notif_perm"))}})}
   function saveBudgetProfile(){if(!profName.trim())return;var newProf={id:"bp_"+Date.now(),name:profName.trim(),budgets:Object.assign({},S.budgets)};setS(function(p){return Object.assign({},p,{budgetProfiles:(p.budgetProfiles||[]).concat([newProf])})});setShowProf(false);setProfName("")}
   function loadBudgetProfile(prof){setS(function(p){return Object.assign({},p,{budgets:Object.assign({},prof.budgets)})})}
@@ -4847,27 +4944,6 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     </div>`;
   }
 
-  if(pinLocked){
-    var pinKeys=["1","2","3","4","5","6","7","8","9","","0","⌫"];
-    return html`<div class="pin-screen">
-      <div style=${{width:44,height:44,borderRadius:14,background:"linear-gradient(135deg,#3b82f6,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,marginBottom:24}}>💸</div>
-      <h2 style=${{fontSize:20,fontWeight:800,marginBottom:8,letterSpacing:"-0.02em"}}>Para Kontrol</h2>
-      <p style=${{fontSize:13,color:"var(--sub)",marginBottom:32}}>${t("enter_pin")}</p>
-      <div style=${{display:"flex",gap:14,marginBottom:32}}>
-        ${[0,1,2,3].map(function(i){return html`<div key=${i} class=${"pin-dot"+(pinInput.length>i?" filled":"")}></div>`})}
-      </div>
-      ${pinCd>0&&html`<p style=${{color:"var(--amber)",fontSize:12,fontWeight:700,marginBottom:16,textAlign:"center",maxWidth:240}}>${lang==="tr"?("Çok fazla yanlış deneme. "+pinCd+" sn sonra tekrar dene."):("Too many attempts. Try again in "+pinCd+"s.")}</p>`}
-      ${pinWrong&&pinCd===0&&html`<p style=${{color:"var(--red)",fontSize:13,fontWeight:700,marginBottom:16,animation:"pulse 0.5s ease"}}>${t("pin_wrong")}</p>`}
-      <div style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,maxWidth:240,opacity:pinCd>0?0.4:1}}>
-        ${pinKeys.map(function(k,i){
-          if(k==="")return html`<div key=${i}/>`;
-          if(k==="⌫")return html`<button key=${i} class="pin-key" onClick=${function(){if(pinCd>0)return;setPinInput(function(p){return p.slice(0,-1)});setPinWrong(false)}} style=${{fontSize:18}}>${k}</button>`;
-          return html`<button key=${i} class="pin-key" onClick=${function(){pinCheck(k)}}>${k}</button>`;
-        })}
-      </div>
-    </div>`;
-  }
-
   return html`<div style=${{maxWidth:480,margin:"0 auto",minHeight:"100vh",paddingBottom:88}}>
 
   <!-- HEADER -->
@@ -4912,7 +4988,7 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       {id:"jev",icon:"⚡",label:"Jev (System One)",val:(jevEngine()==="typesafe")?(lang==="tr"?"Jev API":"Jev API"):(lang==="tr"?"Yerel cekirdek":"Local core")},
       {id:"drive",icon:"☁️",label:t("drive_sync"),val:driveUrl?t("drive_active"):t("drive_off")},
       {id:"notif",icon:"🔔",label:t("notifications"),val:notifOn?(lang==="tr"?"Açık":"On"):(lang==="tr"?"Kapalı":"Off")},
-      {id:"pin",icon:"🔒",label:t("pin_protect"),val:pinIsSet()?(lang==="tr"?"Ayarlı":"Set"):(lang==="tr"?"Yok":"None")}
+      {id:"pin",icon:"🔒",label:t("pin_protect"),val:VAULT_SESSION?(lang==="tr"?"Açık":"Unlocked"):(lang==="tr"?"Kilitli":"Locked")}
     ].map(function(sec,i,arr){
       var open=setSec===sec.id;
       return html`<div key=${sec.id} style=${{borderBottom:i<arr.length-1?"1px solid var(--border)":"none"}}>
@@ -4999,18 +5075,12 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
               <button onClick=${function(){setNotifOn(false)}} style=${{padding:"9px 14px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:11,fontWeight:600,textAlign:"left",cursor:"pointer"}}>✕ ${lang==="tr"?"Kapat":"Turn Off"}</button>`
             :html`<button onClick=${requestNotif} style=${{padding:"11px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(245,158,11,0.3)",background:"rgba(245,158,11,0.06)",color:"var(--amber)",fontSize:12,fontWeight:700,textAlign:"left",cursor:"pointer"}}>${t("notif_enable")}</button>`}
           </div>`}
-          ${sec.id==="pin"&&html`<div>
-            ${!showPinSet?html`<div style=${{display:"flex",gap:6}}>
-              ${pinIsSet()?html`<button onClick=${pinRemove} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(255,68,102,0.3)",background:"rgba(255,68,102,0.06)",color:"var(--red)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("pin_disable")}</button>`:null}
-              <button onClick=${function(){setShowPinSet(true);setPin1("");setPin2("")}} style=${{flex:1,padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.06)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("set_pin")}</button>
-            </div>`
-            :html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
-              <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_label")} value=${pin1} onInput=${function(e){setPin1(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
-              <input class="inp-field" type="password" inputMode="numeric" maxlength="4" placeholder=${t("pin_confirm")} value=${pin2} onInput=${function(e){setPin2(e.target.value.replace(/\D/g,"").slice(0,4))}} style=${{letterSpacing:"0.3em",fontSize:20,fontFamily:"var(--mono)",fontWeight:700,textAlign:"center"}}/>
-              <div style=${{display:"flex",gap:6}}>
-                <button onClick=${pinSetSave} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save_btn")}</button>
-                <button onClick=${function(){setShowPinSet(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button>
-              </div>
+          ${sec.id==="pin"&&html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
+            <div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.5}}>${lang==="tr"?"Finans verileri AES-GCM ile şifrelenir. Parolanı unutursan uygulama kurtaramaz.":"Financial data is encrypted with AES-GCM. The app cannot recover a forgotten passphrase."}</div>
+            ${!showVaultChange?html`<button onClick=${function(){setShowVaultChange(true);setVaultPass1("");setVaultPass2("")}} style=${{padding:"10px 14px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(99,102,241,0.3)",background:"rgba(99,102,241,0.08)",color:"var(--purple)",fontSize:12,fontWeight:700,cursor:"pointer"}}>${t("set_pin")}</button>`:html`<div style=${{display:"flex",flexDirection:"column",gap:8}}>
+              <input class="inp-field" type="password" autocomplete="new-password" placeholder=${t("pin_label")} value=${vaultPass1} onInput=${function(e){setVaultPass1(e.target.value)}}/>
+              <input class="inp-field" type="password" autocomplete="new-password" placeholder=${t("pin_confirm")} value=${vaultPass2} onInput=${function(e){setVaultPass2(e.target.value)}}/>
+              <div style=${{display:"flex",gap:6}}><button disabled=${vaultBusy} onClick=${vaultChangePassphrase} style=${{flex:1,padding:"10px",borderRadius:"var(--radius-sm)",border:"none",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>${t("save_btn")}</button><button onClick=${function(){setShowVaultChange(false)}} style=${{padding:"10px 14px",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:12,cursor:"pointer"}}>${t("cancel")}</button></div>
             </div>`}
           </div>`}
         </div>`}
@@ -5944,8 +6014,33 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
   </div>`;
 }
 var _pkRoot=document.getElementById("root");
-if(ReactDOM.createRoot){ReactDOM.createRoot(_pkRoot).render(React.createElement(App));}
-else{ReactDOM.render(React.createElement(App),_pkRoot);}
+function renderParaApp(){
+  if(ReactDOM.createRoot){ReactDOM.createRoot(_pkRoot).render(React.createElement(App));}
+  else{ReactDOM.render(React.createElement(App),_pkRoot);}
+}
+async function bootstrapVault(){
+  var stored=null,legacy=null;
+  try{stored=localStorage.getItem(VAULT_STORAGE_KEY);legacy=localStorage.getItem(KY)}catch(e){}
+  if(stored&&vaultIsEnvelope(stored)){
+    var pass=window.prompt("Para Kontrol kasasını açmak için parolanı gir:");
+    if(!pass)throw new Error("vault_unlock_cancelled");
+    await vaultUnlockLocal(pass);
+    return;
+  }
+  if(legacy){
+    var oldState=null;
+    try{oldState=JSON.parse(legacy)}catch(e){}
+    if(oldState&&!oldState._demo){
+      var newPass=window.prompt("Verilerin şifrelenmemiş eski formatta. En az 12 karakterlik yeni kasa parolası belirle:");
+      if(!newPass)throw new Error("vault_migration_cancelled");
+      await vaultMigrateLegacy(newPass);
+    }
+  }
+}
+bootstrapVault().then(renderParaApp).catch(function(err){
+  _pkRoot.textContent="Kasa açılamadı. Parolanı kontrol et; yanlış parola veriyi değiştirmez.";
+  if(typeof console!=="undefined")console.warn("[vault]",String(err&&err.message||err));
+});
 
 </script>
 </body>
