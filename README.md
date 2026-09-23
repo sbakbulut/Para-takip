@@ -4,7 +4,7 @@ Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`)
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
 - **Sürüm:** `v12.2` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
-- **Testler:** `npm ci && npm test` — 222 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+- **Testler:** `npm ci && npm test` — 225 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
 
 ## v12.2 — Test altyapısı + CI (ve README'nin gerçekle hizalanması)
 
@@ -14,7 +14,7 @@ Bu sürüm **uygulama davranışını değiştirmez**; deponun doğrulanabilirli
 |---|---|---|
 | 1 | `tests/` — gerçekten çalışan testler (`test.js`, `test-sync.js`, `test-jev.js`, `run.js`, `harness.js`) | v12.1'e kadar README testlerden bahsediyordu ama **dosyalar depoda yoktu**; `/tmp/smoke` gibi yerel bir klasöre işaret ediyordu, yani kimse doğrulayamıyordu |
 | 2 | `gas/Code.gs` testleri **gerçekten çalıştırır** (vm + Apps Script taklidi) | Proxy'nin güvenlik iddiaları (POST-only, token yalnızca gövdede, SSRF kapalı beyaz liste, hız/boyut limiti) artık kanıtlanıyor |
-| 3 | `.github/workflows/ci.yml` | Her push/PR'da sürüm+`<title>` uyumu, `node --check` ve 222 test koşar (Pages doğrudan `main`'den yayınlandığı için tek kapı buydu) |
+| 3 | `.github/workflows/ci.yml` | Her push/PR'da sürüm+`<title>` uyumu, `node --check` ve 225 test koşar (Pages doğrudan `main`'den yayınlandığı için tek kapı buydu) |
 | 4 | `package.json` + `package-lock.json` | Testler `jsdom` ile; React/ReactDOM/htm **yerel** kopyalardan gömülür — testler CDN'e çıkmaz, çevrimdışı deterministiktir |
 | 5 | `LICENSE` (MIT) | Depo public'ti ve lisansı yoktu (= kullanım izni belirsiz) |
 | 6 | README düzeltmeleri | Aşağıdaki "Düzeltilen yanlış iddialar" bölümü |
@@ -33,11 +33,12 @@ Bu sürüm **uygulama davranışını değiştirmez**; deponun doğrulanabilirli
 
 ```
 $ npm test
-== test.js:      ALL PASS  84/84
+== test.js:      ALL PASS  85/85
 == test-sync.js: ALL PASS  53/53
 == test-jev.js:  ALL PASS  85/85
+== test-runner.js: ALL PASS  2/2
 
-TAMAMI GECTI — 222 kontrol, 0 hata
+TAMAMI GECTI — 225 kontrol, 0 hata
 ```
 
 ## v12.1 — Jev düzeltmesi: doğru uç nokta + doğrulanmış model slug'ı
@@ -362,14 +363,15 @@ React/ReactDOM/htm `node_modules` içindeki yerel UMD kopyalarından gömülür,
 
 ```bash
 npm ci          # yalnizca jsdom + React/htm (devDependencies)
-npm test        # 3 dosya, 222 kontrol, ~4 sn
+npm test        # 4 dosya, 225 kontrol, ~4 sn
 ```
 
 | Dosya | Ne sınar |
 |---|---|
-| `tests/test.js` (84) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
+| `tests/test.js` (85) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
 | `tests/test-sync.js` (53) | **`gas/Code.gs` gerçekten çalıştırılır** (vm + `PropertiesService`/`ContentService`/`UrlFetchApp` taklidi): `doGet` her zaman `method_not_allowed`, `setToken` min 16 karakter, token doğrulama (`server_token_missing`/`unauthorized`), `put`/`get` turu ve rev, `bad_json`/`bad_action`/`bad_data`/`too_large`, dakikada 60 istek limiti, Jev proxy'sinde **SSRF kapalı beyaz liste** (istemcinin `url`/`endpoint` alanı yok sayılır), `bad_model` desen denetimi, üst akış hata eşlemesi (401/402/429/500/unreachable). İstemci tarafı: `drivePost` POST+`no-store`+token **gövdede** (URL'de asla), `_driveEnabled` koşulu |
 | `tests/test-jev.js` (85) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı) |
+| `tests/test-runner.js` (2) | test runner'ın alt süreç başlatma hatalarını ve özet ayrıştırmasını doğrular |
 
 Yerel olarak tek dosya çalıştırmak istersen:
 

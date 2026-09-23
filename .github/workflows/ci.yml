@@ -40,4 +40,4 @@ jobs:
 
       - name: Test ciktisini ozetle
         if: always()
-        run: echo "Testler jsdom icinde calisir; CDN'e cikilmaz (React/htm yerel kopyalardan gomulur)."
+        run: echo "Testler jsdom icinde calisir; CDN'e cikilmaz (React/htm yerel kopyalardan gomulur); toplam 225 kontrol."

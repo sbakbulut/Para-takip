@@ -4,17 +4,23 @@
  */
 const { spawnSync } = require("child_process");
 const path = require("path");
+const { runOne } = require("./runner-lib");
 
-const FILES = ["test.js", "test-sync.js", "test-jev.js"];
+const FILES = ["test.js", "test-sync.js", "test-jev.js", "test-runner.js"];
 let pass = 0, fail = 0, failedFiles = [];
 
 for (const f of FILES) {
-  const r = spawnSync(process.execPath, [path.join(__dirname, f)], { encoding: "utf8" });
-  const out = (r.stdout || "") + (r.stderr || "");
+  const result = runOne(f, (file) => spawnSync(process.execPath, [path.join(__dirname, file)], { encoding: "utf8" }));
+  const out = result.output || "";
   process.stdout.write(out);
-  const m = out.match(/== ([^:]+): (ALL PASS|FAIL)\s+(\d+)\/(\d+)/);
-  if (m) { pass += Number(m[3]); fail += Number(m[4]) - Number(m[3]); }
-  if (r.status !== 0) failedFiles.push(f);
+  if (result.summary) {
+    pass += result.summary.passed;
+    fail += result.summary.total - result.summary.passed;
+  }
+  if (!result.ok) {
+    failedFiles.push(f);
+    console.error(`RUNNER HATASI — ${result.message}`);
+  }
 }
 
 console.log("");
