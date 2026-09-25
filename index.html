@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v12.4</title>
+<title>Para Kontrol v12.5</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="12.4";
+var APP_VERSION="12.5";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -4555,27 +4555,33 @@ function App(){
     </div>`;
   }
 
-  /* MODUL 2 — serbest metinden otomatik doldurma onerisi */
+  /* MODUL 2 — serbest metinden otomatik doldurma onerisi.
+     Not alaninin HEMEN USTUNDE uretilir: kullanici notu yazarken klavye
+     acik olsa da ekranda kalir (tutar seridindeki gibi kompakt bicim). */
   function jevSuggestUi(){
     var sug=(jevSuggest!==null)?jevSuggest:jevSuggestLocal;
     if(!sug)return null;
     if(!sug.category&&sug.amount==null)return null;
+    var TR=(lang==="tr");
     var cobj=sug.category?fc(sug.category):null;
     var pct=Math.round((sug.confidence||0)*100);
     var manual=!!sug.requiresManualReview;
     var col=manual?"var(--amber)":"var(--blue2)";
-    return html`<div style=${{display:"flex",alignItems:"center",gap:8,padding:"9px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(59,130,246,0.08)",border:"1px solid "+(manual?"rgba(245,158,11,0.28)":"rgba(59,130,246,0.25)")}}>
-      <span style=${{fontSize:14}}>${manual?"🤔":"🪄"}</span>
-      <div style=${{flex:1,minWidth:0}}>
-        <div style=${{fontSize:10,fontWeight:800,color:col}}>
-          ${cobj?(cobj.icon+" "+cobj.label):(lang==="tr"?"Kategori belirsiz":"Category unclear")}
-          ${sug.amount!=null?html`<span style=${{color:"var(--sub)",fontWeight:700}}> · ${f(sug.amount)}</span>`:null}
-          <span style=${{color:"var(--dim)",fontWeight:700}}> · %${pct}</span>
+    var accent=manual?"rgba(245,158,11,":"rgba(59,130,246,";
+    return html`<div style=${{padding:"10px 12px",borderRadius:"var(--radius-sm)",marginBottom:8,background:accent+"0.08)",border:"1px solid "+accent+"0.25)"}}>
+      <div style=${{display:"flex",alignItems:"center",gap:8}}>
+        <span style=${{width:24,height:24,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0,background:accent+"0.14)"}}>${manual?"🤔":"🪄"}</span>
+        <div style=${{flex:1,minWidth:0}}>
+          <div style=${{fontSize:8,fontWeight:800,color:"var(--dim)",letterSpacing:"0.1em",textTransform:"uppercase"}}>${"🏷️ "+(TR?"Jev kategori onerisi":"Jev category suggestion")}</div>
+          <div style=${{fontSize:11,fontWeight:800,color:col,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            ${cobj?(cobj.icon+" "+cobj.label):(TR?"Kategori belirsiz":"Category unclear")}
+            ${sug.amount!=null?html`<span style=${{color:"var(--sub)",fontWeight:700}}> · ${f(sug.amount)}</span>`:null}
+          </div>
+          <div style=${{fontSize:9,color:"var(--dim)",marginTop:1}}>${manual?(TR?"Jev emin degil — kontrol et":"Jev is not confident — review"):(TR?"Notundan cikardi":"Extracted from your note")}${sug.engine==="typesafe"?" · Jev API":""}${" · %"+pct}</div>
         </div>
-        <div style=${{fontSize:9,color:"var(--dim)",marginTop:1}}>${manual?(lang==="tr"?"Jev emin degil — kontrol et":"Jev is not confident — review"):(lang==="tr"?"Jev metinden cikardi":"Jev extracted this")}${sug.engine==="typesafe"?" · Jev API":""}</div>
+        <button onClick=${function(){applyJevSuggestion(sug)}} style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#3b82f6,#6366f1)",color:"#fff",fontSize:10,fontWeight:800,cursor:"pointer",flexShrink:0}}>${TR?"Doldur":"Fill"}</button>
+        ${jevEngine()==="typesafe"&&html`<button onClick=${function(){refineJevSuggestion(sug.text)}} title=${TR?"Jev API ile tekrar sor":"Ask Jev API again"} style=${{padding:"7px 9px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>↻</button>`}
       </div>
-      <button onClick=${function(){applyJevSuggestion(sug)}} style=${{padding:"6px 10px",borderRadius:"var(--radius-xs)",border:"none",background:"linear-gradient(135deg,#3b82f6,#6366f1)",color:"#fff",fontSize:10,fontWeight:800,cursor:"pointer",flexShrink:0}}>${lang==="tr"?"Doldur":"Fill"}</button>
-      ${jevEngine()==="typesafe"&&html`<button onClick=${function(){refineJevSuggestion(sug.text)}} title=${lang==="tr"?"Jev API ile tekrar sor":"Ask Jev API again"} style=${{padding:"6px 8px",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--card2)",color:"var(--sub)",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>↻</button>`}
     </div>`;
   }
 
@@ -5258,9 +5264,10 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       </div>`}
     </div>`}
 
+    <!-- Jev kategori onerisi: not alaninin HEMEN USTUNDE — klavye acikken de gorunur -->
+    ${jevSuggestUi()}
     <input class="inp-field" type="text" placeholder=${t("add_note")} value=${note} onInput=${function(e){setNote(e.target.value)}} onKeyDown=${quickSaveKey} style=${{marginBottom:10}}/>
     ${jevFillMsg&&html`<div style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(6,255,165,0.08)",border:"1px solid rgba(6,255,165,0.25)",fontSize:10,color:"var(--green)",fontWeight:700}}>${jevFillMsg}</div>`}
-    ${jevSuggestUi()}
     <button class=${"btn-primary"+(ok?" ok":"")} onClick=${addExp}>
       ${ok?t("added"):fc(cat).icon+" "+(dt===tdy()?t("add_expense"):edp.d+" "+MN[edp.m]+t("add_to_date"))}
     </button>

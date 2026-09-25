@@ -3,8 +3,36 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v12.4` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
-- **Testler:** `npm ci && npm test` — 282 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+- **Sürüm:** `v12.5` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Testler:** `npm ci && npm test` — 288 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+
+## Kategori önerisi de not alanının hemen üstünde (v12.5)
+
+**✏️ Harcama → Not** alanına yazarken (`≥4` karakter) çıkan Jev kategori önerisi, artık not alanının
+**hemen üstünde** kompakt bir şerit olarak durur: klavye açıkken not yazarken de ekranın dışında kalmaz,
+"Doldur" butonu elinin altındadır.
+
+- **Sol rozet**: `🪄` (emin) veya `🤔` (elle kontrol et — `requiresManualReview`)
+- **Satır**: önerilen kategori (`🏠 Kira`), nottan çıkarılan tutar (`· 1.200 ₺`) ve güven yüzdesi (`· %48`)
+- **Sağda**: `Doldur` (kategori + tutar + notu forma uygular) ve uzak motor açıkken `↻` (Jev API'ye tekrar sor)
+- Renk kodu amber (elle kontrol) / mavi (normal) olarak korunur; yerel çekirdek 0 ms'de karar verir,
+  Jev API açıksa 700 ms sonra öneri güncellenir.
+
+İlgili test: `tests/test-jev.js` bölüm 15 (6 kontrol) — kartın not yazılınca görünmesi, not alanından
+**önce** gelmesi, güven yüzdesi, `Doldur` butonunun tutar alanını doldurması, konsol hatası olmaması.
+
+### Ölçülen test sonucu (v12.5)
+
+```
+$ npm test
+== test.js:               ALL PASS  89/89
+== test-sync.js:          ALL PASS  64/64
+== test-jev.js:           ALL PASS  99/99
+== test-category-order.js: ALL PASS  34/34
+== test-runner.js:        ALL PASS  2/2
+
+TAMAMI GECTI — 288 kontrol, 0 hata
+```
 
 ## Anlık analiz artık tutar alanının hemen altında (v12.4)
 
@@ -431,14 +459,14 @@ React/ReactDOM/htm `node_modules` içindeki yerel UMD kopyalarından gömülür,
 
 ```bash
 npm ci          # yalnizca jsdom + React/htm (devDependencies)
-npm test        # 5 dosya, 282 kontrol
+npm test        # 5 dosya, 288 kontrol
 ```
 
 | Dosya | Ne sınar |
 |---|---|
 | `tests/test.js` (89) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
 | `tests/test-sync.js` (64) | **`gas/Code.gs` gerçekten çalıştırılır** (vm + `PropertiesService`/`ContentService`/`UrlFetchApp` taklidi): `doGet` her zaman `method_not_allowed`, `setToken` min 16 karakter, token doğrulama (`server_token_missing`/`unauthorized`), `put`/`get` turu ve rev, `bad_json`/`bad_action`/`bad_data`/`too_large`, dakikada 60 istek limiti, Jev proxy'sinde **SSRF kapalı beyaz liste** (istemcinin `url`/`endpoint` alanı yok sayılır), `bad_model` desen denetimi, üst akış hata eşlemesi (401/402/429/500/unreachable). İstemci tarafı: `drivePost` POST+`no-store`+token **gövdede** (URL'de asla), `_driveEnabled` koşulu |
-| `tests/test-jev.js` (93) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı), anlık analiz kartının yeri (tutar alanının hemen altı — klavye bölgesi) |
+| `tests/test-jev.js` (99) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı), anlık analiz kartının yeri (tutar alanının hemen altı — klavye bölgesi), kategori önerisi kartının yeri (not alanının hemen üstü) ve önerinin forma uygulanması |
 | `tests/test-category-order.js` (34) | kategorileri **elle sıralama**: düzenleme modunda ▲/▼ okları ve ipucu metni, uç kısıtları (ilk ▲ / son ▼ devre dışı), yukarı-aşağı taşımanın listeyi değiştirmesi, harcama kategori seçicisi + arama filtresinin yeni sırayı kullanması, kasa (AES-GCM) zarfına yazım ve yenileme sonrası kalıcılık, demo verinin diske yazılmaması, İngilizce etiketler |
 | `tests/test-runner.js` (2) | test runner'ın alt süreç başlatma hatalarını ve özet ayrıştırmasını doğrular |
 

@@ -332,6 +332,33 @@ const VALID = { model: "typesafe/jev-1.13", answers: { q: { type: "choice", choi
     s.eq("anlik analiz sirasinda konsol hatasi yok", wG.__consoleErrors.length, 0);
   }
 
+  /* ---------- 15) Kategori onerisi karti: not alaninin hemen ustunde ---------- */
+  {
+    const wS = await boot();
+    const doc = wS.document;
+    const inputs = Array.from(doc.querySelectorAll("input"));
+    const noteInput = inputs.find((i) => (i.getAttribute("placeholder") || "").indexOf("Not ekle") === 0);
+    const amtInput = inputs.find((i) => (i.getAttribute("inputmode") || "") === "decimal");
+    const setVal = Object.getOwnPropertyDescriptor(wS.HTMLInputElement.prototype, "value").set;
+    setVal.call(noteInput, "Trendyol'dan kulaklik aldik 1200 TL");
+    noteInput.dispatchEvent(new wS.Event("input", { bubbles: true }));
+    await waitFor(() => Array.from(doc.querySelectorAll("div"))
+      .some((d) => (d.textContent || "").trim() === "🏷️ Jev kategori onerisi"), 6000, wS);
+    const eyebrow = Array.from(doc.querySelectorAll("div"))
+      .find((d) => (d.textContent || "").trim() === "🏷️ Jev kategori onerisi");
+    const card = eyebrow && eyebrow.parentElement.parentElement.parentElement;
+    s.ok("not yazilinca kategori onerisi karti gorunur", !!card);
+    const POS = wS.Node.DOCUMENT_POSITION_FOLLOWING;
+    s.ok("kart not alanindan ONCE (klavye bolgesi)", !!(card.compareDocumentPosition(noteInput) & POS));
+    s.ok("oneri metni guven yuzdesi icerir", (card.textContent || "").indexOf("%") !== -1, (card.textContent || "").trim());
+    const fillBtn = Array.from(card.querySelectorAll("button")).find((b) => /Doldur/.test(b.textContent || ""));
+    s.ok("Doldur butonu var", !!fillBtn);
+    click(wS, fillBtn);
+    await waitFor(() => (amtInput.value || "").length > 0, 4000, wS);
+    s.eq("Doldur tutar alanini doldurur", wS.parseNum(amtInput.value), 1200);
+    s.eq("kategori onerisi sirasinda konsol hatasi yok", wS.__consoleErrors.length, 0);
+  }
+
   s.done();
 })().catch((e) => {
   console.error("BEKLENMEYEN HATA:", (e && e.stack) || e);
