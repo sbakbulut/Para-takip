@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v12.6</title>
+<title>Para Kontrol v12.7</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="12.6";
+var APP_VERSION="12.7";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -3078,27 +3078,6 @@ function App(){
   var _lastSyncTs=h(0),lastSyncTs=_lastSyncTs[0],setLastSyncTs=_lastSyncTs[1];
   var _syncDraftUrl=h(function(){try{return localStorage.getItem("pk_drive_url")||""}catch(e){return""}}),syncDraftUrl=_syncDraftUrl[0],setSyncDraftUrl=_syncDraftUrl[1];
   var _syncDraftToken=h(function(){try{return localStorage.getItem("pk_drive_token")||""}catch(e){return""}}),syncDraftToken=_syncDraftToken[0],setSyncDraftToken=_syncDraftToken[1];
-  /* ==== Voice Chat state'leri ==== */
-  var _voiceModal=h(false),voiceModal=_voiceModal[0],setVoiceModal=_voiceModal[1];
-  var _voiceLive=h(false),voiceLive=_voiceLive[0],setVoiceLive=_voiceLive[1];
-  var _voiceListening=h(false),voiceListening=_voiceListening[0],setVoiceListening=_voiceListening[1];
-  var _voiceSpeaking=h(false),voiceSpeaking=_voiceSpeaking[0],setVoiceSpeaking=_voiceSpeaking[1];
-  var voiceModalRef=ur(voiceModal);voiceModalRef.current=voiceModal;
-  var voiceLiveRef=ur(voiceLive);voiceLiveRef.current=voiceLive;
-  var voiceListeningRef=ur(voiceListening);voiceListeningRef.current=voiceListening;
-  var voiceSpeakingRef=ur(voiceSpeaking);voiceSpeakingRef.current=voiceSpeaking;
-  var voiceAutoPausedRef=ur(false);
-  var _voiceTranscript=h(""),voiceTranscript=_voiceTranscript[0],setVoiceTranscript=_voiceTranscript[1];
-  var _voiceAiText=h(""),voiceAiText=_voiceAiText[0],setVoiceAiText=_voiceAiText[1];
-  var _voiceErr=h(""),voiceErr=_voiceErr[0],setVoiceErr=_voiceErr[1];
-  var _voiceHistory=h([]),voiceHistory=_voiceHistory[0],setVoiceHistory=_voiceHistory[1];
-  var _voiceSupported=h(true),voiceSupported=_voiceSupported[0],setVoiceSupported=_voiceSupported[1];
-  var _voiceList=h([]),voiceList=_voiceList[0],setVoiceList=_voiceList[1];
-  var _voiceSelectedURI=h(function(){try{return localStorage.getItem("pk_voice_uri")||""}catch(e){return""}}),voiceSelectedURI=_voiceSelectedURI[0],setVoiceSelectedURI=_voiceSelectedURI[1];
-  var _voiceShowPicker=h(false),voiceShowPicker=_voiceShowPicker[0],setVoiceShowPicker=_voiceShowPicker[1];
-  /* Ses secimi: tarayicinin Web Speech sesleri (voiceURI) kullanilir.
-     Eski MiniMax ses id'si (pk_voice_minmax) artik okunmaz. */
-  var _voiceSpeed=h(function(){try{return parseFloat(localStorage.getItem("pk_voice_speed"))||1.0}catch(e){return 1.0}}),voiceSpeed=_voiceSpeed[0],setVoiceSpeed=_voiceSpeed[1];
 
   /* ==== Drive Sync (App scope) ==== */
   var _drivePushTimer=null;
@@ -3339,174 +3318,6 @@ function App(){
     setSyncStatus("idle");
   }
 
-  /* ==== Voice Chat (sesli sohbet) ==== */
-  /* NOT: bunlar useRef ile tutulmalı — düz "var" her render'da sıfırlanır ve mikrofon/TTS state'ini kaybettirir */
-  var _voiceRecR=ur(null);
-  var _voiceBusyR=ur(false);
-  var _voiceRestartTimerR=ur(null);
-  var _voiceAudioElR=ur(null);
-
-  function _voiceLoadVoices(){
-    if(typeof window==="undefined"||!window.speechSynthesis)return;
-    var voices=window.speechSynthesis.getVoices()||[];
-    /* Türkçe önce, sonra İngilizce, sonra diğerleri */
-    var tr=voices.filter(function(v){return v.lang&&v.lang.toLowerCase().indexOf("tr")===0});
-    var en=voices.filter(function(v){return v.lang&&v.lang.toLowerCase().indexOf("en")===0});
-    var other=voices.filter(function(v){return !v.lang||(v.lang.toLowerCase().indexOf("tr")!==0&&v.lang.toLowerCase().indexOf("en")!==0)});
-    setVoiceList(tr.concat(en).concat(other));
-  }
-
-  function _voiceStopSpeak(){
-    try{if(typeof window!=="undefined"&&window.speechSynthesis)window.speechSynthesis.cancel()}catch(e){}
-    try{if(_voiceAudioElR.current){_voiceAudioElR.current.onended=null;_voiceAudioElR.current.pause();_voiceAudioElR.current.currentTime=0}}catch(e){}
-  }
-
-  async function _voiceSpeak(text){
-    if(typeof window==="undefined"||!text)return;
-    _voiceStopSpeak();
-    /* DeepSeek sadece metin uretir; seslendirme tarayicinin Web Speech motoruyla yapilir */
-    if(!window.speechSynthesis){
-      setVoiceSpeaking(false);
-      setVoiceErr(lang==="tr"?"Bu tarayıcı sesli okumayı desteklemiyor.":"This browser does not support spoken replies.");
-      return;
-    }
-    try{
-      var spoken=String(text).slice(0,600);
-      var u=new SpeechSynthesisUtterance(spoken);
-      var voice=null;
-      try{
-        var voices=window.speechSynthesis.getVoices()||[];
-        if(voiceSelectedURI)voice=voices.filter(function(v){return v.voiceURI===voiceSelectedURI})[0]||null;
-        if(!voice){
-          var want=(lang==="en")?"en":"tr";
-          voice=voices.filter(function(v){return v.lang&&v.lang.toLowerCase().indexOf(want)===0})[0]||null;
-        }
-      }catch(e){}
-      if(voice)u.voice=voice;
-      u.lang=(voice&&voice.lang)?voice.lang:(lang==="en"?"en-US":"tr-TR");
-      u.rate=voiceSpeed||1;
-      u.pitch=1;
-      setVoiceSpeaking(true);
-      var guard=setTimeout(function(){setVoiceSpeaking(false)},Math.min(60000,6000+spoken.length*90));
-      u.onend=function(){
-        clearTimeout(guard);
-        setVoiceSpeaking(false);
-        /* Live modda konusma otomatik devam eder */
-        if(voiceLiveRef.current&&voiceModalRef.current&&!voiceAutoPausedRef.current){
-          setTimeout(function(){
-            if(voiceLiveRef.current&&voiceModalRef.current&&!voiceAutoPausedRef.current&&!voiceListeningRef.current&&!aiLoadingRef.current)_voiceStartRec();
-          },400);
-        }
-      };
-      u.onerror=function(){clearTimeout(guard);setVoiceSpeaking(false)};
-      window.speechSynthesis.speak(u);
-    }catch(e){
-      setVoiceSpeaking(false);
-      setVoiceErr((lang==="tr"?"Ses hatası: ":"Speech error: ")+String(e));
-    }
-  }
-
-  function _voiceStartRec(){
-    if(typeof window==="undefined")return;
-    var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){setVoiceSupported(false);setVoiceErr((lang==="tr"?"Sesli giriş bu tarayıcıda desteklenmiyor. Chrome/Edge kullan.":"Voice input not supported. Use Chrome/Edge."));return}
-    if(_voiceRestartTimerR.current){clearTimeout(_voiceRestartTimerR.current);_voiceRestartTimerR.current=null;}
-    voiceAutoPausedRef.current=false;
-    /* Eski instance varsa önce abort et, hata callback'ini geçici olarak devre dışı bırak */
-    if(_voiceRecR.current){
-      try{_voiceRecR.current._suppressErrors=true;_voiceRecR.current._manualStop=true;_voiceRecR.current.abort()}catch(e){}
-      _voiceRecR.current=null;
-      _voiceRestartTimerR.current=setTimeout(function(){_voiceRestartTimerR.current=null;_voiceStartRec()},150);
-      return;
-    }
-    try{
-      var rec=new SR();
-      rec._manualStop=false;
-      _voiceRecR.current=rec;
-      rec.lang=(lang==="en")?"en-US":"tr-TR";
-      rec.continuous=false;
-      rec.interimResults=true;
-      setVoiceListening(true);setVoiceTranscript("");setVoiceErr("");
-      rec.onresult=function(ev){
-        if(rec!==_voiceRecR.current)return;
-        var interim="";var final="";
-        for(var i=ev.resultIndex;i<ev.results.length;i++){
-          if(ev.results[i].isFinal)final+=ev.results[i][0].transcript;
-          else interim+=ev.results[i][0].transcript;
-        }
-        if(final){setVoiceTranscript(final);_voiceAskAI(final);}
-        else setVoiceTranscript(interim);
-      };
-      rec.onerror=function(ev){
-        if(rec!==_voiceRecR.current)return;
-        setVoiceListening(false);
-        /* Aborted hatası genelde biz kapattığımızda gelir — gösterme */
-        if(ev.error==="aborted")return;
-        if(rec._suppressErrors)return;
-        if(ev.error==="no-speech"){setVoiceErr((lang==="tr"?"Ses algılanmadı, tekrar dene":"No speech detected, try again"));}
-        else if(ev.error==="not-allowed"){setVoiceErr((lang==="tr"?"Mikrofon izni verilmedi":"Microphone permission denied"));}
-        else{setVoiceErr((lang==="tr"?"Hata: ":"Error: ")+ev.error);}
-      };
-      rec.onend=function(){
-        if(rec!==_voiceRecR.current)return;
-        setVoiceListening(false);
-        /* Manuel durdurma ise otomatik başlatma */
-        if(rec._manualStop)return;
-        /* Live modda, kullanıcı durdurmadıysa, AI konuşmuyorken ve modal hâlâ açıksa otomatik tekrar başlat */
-        if(voiceLiveRef.current&&voiceModalRef.current&&!voiceAutoPausedRef.current&&!voiceSpeakingRef.current&&!aiLoadingRef.current){
-          _voiceRestartTimerR.current=setTimeout(function(){
-            _voiceRestartTimerR.current=null;
-            if(voiceLiveRef.current&&voiceModalRef.current&&!voiceAutoPausedRef.current&&!voiceListeningRef.current&&!voiceSpeakingRef.current&&!aiLoadingRef.current)_voiceStartRec();
-          },300);
-        }
-      };
-      rec.start();
-    }catch(e){
-      setVoiceListening(false);
-      setVoiceErr((lang==="tr"?"Başlatılamadı: ":"Failed to start: ")+String(e));
-    }
-  }
-
-  function _voiceStopRec(){
-    voiceAutoPausedRef.current=true;
-    if(_voiceRestartTimerR.current){clearTimeout(_voiceRestartTimerR.current);_voiceRestartTimerR.current=null;}
-    if(_voiceRecR.current){
-      try{_voiceRecR.current._suppressErrors=true;_voiceRecR.current._manualStop=true;_voiceRecR.current.abort()}catch(e){}
-      _voiceRecR.current=null;
-    }
-    setVoiceListening(false);
-    setVoiceErr("");
-  }
-
-  async function _voiceAskAI(question){
-    if(_voiceBusyR.current||!question||!question.trim())return;
-    _voiceBusyR.current=true;
-    setAiLoading(true);setVoiceErr("");setVoiceAiText("");
-    try{
-      var ctx=buildAiContext();
-      var sysContext="Su anki ayin finansal baglami:\n"+ctxToPrompt(ctx)+"\n\n--- Talimat: Kisa ve konusma tarzinda cevap ver (maks 2-3 cumle, sesli okunacak). Dogrudan Turkce konus, sanki kullanciyla yuz yuze konusuyormus gibi dogal ol. ---\n\nSoru: "+question;
-      var msgs=[{role:"user",content:sysContext}];
-      var text=await callDeepSeekAI(msgs,lang);
-      setVoiceAiText(text);
-      setVoiceHistory(function(h){return h.concat([{role:"user",content:question},{role:"assistant",content:text}])});
-      _voiceSpeak(text);
-    }catch(e){
-      setVoiceErr(e&&e.message?e.message:"Hata");
-    }finally{
-      setAiLoading(false);_voiceBusyR.current=false;
-    }
-  }
-
-  function voiceToggle(){
-    if(voiceListening){_voiceStopRec();return}
-    if(voiceSpeaking){voiceAutoPausedRef.current=true;if(_voiceRestartTimerR.current){clearTimeout(_voiceRestartTimerR.current);_voiceRestartTimerR.current=null;}_voiceStopSpeak();setVoiceSpeaking(false);return}
-    _voiceStartRec();
-  }
-
-  function voiceClose(){
-    _voiceStopRec();_voiceStopSpeak();
-    setVoiceModal(false);setVoiceLive(false);setVoiceListening(false);setVoiceSpeaking(false);setVoiceTranscript("");setVoiceAiText("");setVoiceErr("");
-  }
   var _calcPay=h(""),calcPay=_calcPay[0],setCalcPay=_calcPay[1];
   var _aiKeyDraft=h(""),aiKeyDraft=_aiKeyDraft[0],setAiKeyDraft=_aiKeyDraft[1];
   var _aiKeySaved=h(function(){return !!AI_CONFIG.apiKey}),aiKeySaved=_aiKeySaved[0],setAiKeySaved=_aiKeySaved[1];
@@ -3908,21 +3719,6 @@ function App(){
     return function(){if(_driveInterval){clearInterval(_driveInterval);_driveInterval=null;_driveBooted=false}}
   },[]);
   ef(function(){localStorage.setItem("pk_notif",notifOn?"1":"0")},[notifOn]);
-  /* Voice: modal kapanınca/komponent kapanınca ses kaydını durdur */
-  ef(function(){
-    if(typeof window==="undefined")return;
-    var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR)setVoiceSupported(false);
-    if(window.speechSynthesis){
-      _voiceLoadVoices();
-      /* Sesler async yüklenir — voiceschanged event'ini dinle */
-      window.speechSynthesis.onvoiceschanged=_voiceLoadVoices;
-    }
-    return function(){
-      try{if(_voiceRecR.current)_voiceRecR.current.abort()}catch(e){}
-      try{if(window.speechSynthesis){window.speechSynthesis.onvoiceschanged=null;window.speechSynthesis.cancel()}}catch(e){}
-    }
-  },[]);
   ef(function(){return function(){if(undoTimerRef.current)clearTimeout(undoTimerRef.current)}},[]);
   ef(function(){
     if(S._demo)return; /* ornek veriler icin otomatik kayit yapilmaz */
@@ -5535,7 +5331,6 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
           <div style=${{display:"flex",gap:6}}>
             <button disabled=${aiLoading} onClick=${regenerateAiInsight} style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(168,85,247,0.32)",background:aiLoading?"var(--card2)":"linear-gradient(135deg,#a855f7,#6366f1)",color:"#fff",fontSize:11,fontWeight:800,cursor:aiLoading?"wait":"pointer",opacity:aiLoading?0.6:1}}>${aiLoading?(lang==="tr"?"Yorumlanıyor…":"Thinking…"):(lang==="tr"?"🪄 AI ile Yorumla":"🪄 Analyze with AI")}</button>
             <button disabled=${aiLoading} onClick=${function(){setAiAskModal(true);setAiErr("")}} style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(59,130,246,0.32)",background:"linear-gradient(135deg,#3b82f6,#2563eb)",color:"#fff",fontSize:11,fontWeight:800,cursor:aiLoading?"wait":"pointer",opacity:aiLoading?0.6:1}}>💬 ${lang==="tr"?"AI'ya Sor":"Ask AI"}</button>
-            <button disabled=${aiLoading} onClick=${function(){setVoiceModal(true);setVoiceErr("");setVoiceLive(true)}} style=${{padding:"8px 11px",borderRadius:"var(--radius-xs)",border:"1px solid rgba(16,185,129,0.32)",background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff",fontSize:11,fontWeight:800,cursor:aiLoading?"wait":"pointer",opacity:aiLoading?0.6:1,animation:"none"}}>🎤 ${lang==="tr"?"Sesli Sohbet":"Voice Chat"}</button>
           </div>
         </div>
         ${aiErr&&html`<div style=${{padding:"10px 12px",borderRadius:8,background:"rgba(255,68,102,0.10)",border:"1px solid rgba(255,68,102,0.24)",color:"var(--red)",fontSize:11,marginBottom:10,lineHeight:1.5}}>
@@ -5912,90 +5707,6 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
         <textarea onFocus=${function(e){setTimeout(function(){try{e.target.scrollIntoView({block:"center",behavior:"smooth"})}catch(_){}},150)}} onKeyDown=${function(e){if(e.key==="Enter"&&!e.shiftKey&&window.innerWidth>768){e.preventDefault();if(aiAskInput.trim()&&!aiLoading)askAiQuestion(aiAskInput.trim())}}} rows="2" placeholder=${window.innerWidth>768?(lang==="tr"?"Sorunu yaz… (Enter ile gönder)":"Type your question… (Enter to send)"):(lang==="tr"?"Sorunu yaz…":"Type your question…")} value=${aiAskInput} onInput=${function(e){setAiAskInput(e.target.value)}} style=${{flex:1,resize:"none",borderRadius:"var(--radius-xs)",border:"1px solid var(--border)",background:"var(--inp)",color:"var(--txt)",padding:"10px 12px",fontSize:13,fontFamily:"var(--font)",minHeight:42}}/>
         <button disabled=${!aiAskInput.trim()||aiLoading} onClick=${function(){if(aiAskInput.trim())askAiQuestion(aiAskInput.trim())}} style=${{padding:"10px 16px",borderRadius:"var(--radius-sm)",border:"none",background:(!aiAskInput.trim()||aiLoading)?"var(--card2)":"linear-gradient(135deg,#a855f7,#6366f1)",color:(!aiAskInput.trim()||aiLoading)?"var(--sub)":"#fff",fontSize:13,fontWeight:800,cursor:(!aiAskInput.trim()||aiLoading)?"not-allowed":"pointer"}}>${aiLoading?"…":"↑"}</button>
       </div>
-    </div>
-  </div>`}
-
-  ${voiceModal&&html`<div onClick=${function(){if(!aiLoading)voiceClose()}} style=${{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",paddingBottom:kbHeight+"px",transition:"padding-bottom 0.15s ease-out"}}>
-    <div onClick=${function(e){e.stopPropagation()}} class="glass" style=${{width:"100%",maxWidth:480,display:"flex",flexDirection:"column",borderRadius:"20px 20px 0 0",padding:18,background:dk?"rgba(13,17,23,0.97)":"rgba(255,255,255,0.97)",maxHeight:"92vh"}}>
-      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <div style=${{display:"flex",alignItems:"center",gap:8}}>
-          <span style=${{fontSize:18}}>🎤</span>
-          <div>
-            <p style=${{fontSize:14,fontWeight:800,color:"var(--txt)"}}>${lang==="tr"?"Sesli Sohbet":"Voice Chat"}</p>
-            <p style=${{fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"DeepSeek V4.1 Flash — canlı sesli asistan":"DeepSeek V4.1 Flash — live voice assistant"}</p>
-          </div>
-        </div>
-        <div style=${{display:"flex",alignItems:"center",gap:6}}>
-          <button onClick=${function(){setVoiceLive(!voiceLive);if(voiceSpeaking)_voiceStopSpeak();if(!voiceLive&&voiceListening)_voiceStopRec()}} style=${{padding:"5px 9px",borderRadius:999,border:"1px solid "+(voiceLive?"rgba(16,185,129,0.5)":"var(--border)"),background:voiceLive?"rgba(16,185,129,0.18)":"var(--card2)",color:voiceLive?"var(--green)":"var(--sub)",fontSize:10,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-            <span style=${{display:"inline-block",width:6,height:6,borderRadius:3,background:voiceLive?"var(--green)":"var(--sub)",animation:voiceLive?"pulse 1.2s infinite":"none"}}/>
-            ${lang==="tr"?(voiceLive?"Live":"Kapalı"):(voiceLive?"Live":"Off")}
-          </button>
-          <button onClick=${function(){setVoiceShowPicker(!voiceShowPicker)}} title=${lang==="tr"?"Ses seç":"Choose voice"} style=${{padding:"5px 9px",borderRadius:999,border:"1px solid rgba(168,85,247,0.32)",background:"rgba(168,85,247,0.18)",color:"#d8b4fe",fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-            🔊 <span style=${{fontSize:9,fontWeight:700,maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${(voiceList.filter(function(v){return v.voiceURI===voiceSelectedURI})[0]||{}).name||(lang==="tr"?"Varsayılan ses":"Default voice")}</span>
-          </button>
-          <button onClick=${voiceClose} style=${{width:32,height:32,borderRadius:8,background:"var(--card)",border:"1px solid var(--border)",color:"var(--sub)",fontSize:18,cursor:"pointer"}}>×</button>
-        </div>
-      </div>
-
-      ${voiceShowPicker&&html`<div class="glass-sm fade-in" style=${{marginBottom:12,maxHeight:260,overflowY:"auto",padding:6,border:"1px solid rgba(168,85,247,0.22)"}}>
-        <div style=${{fontSize:10,color:"#d8b4fe",fontWeight:700,padding:"4px 8px 8px",letterSpacing:"0.04em",textTransform:"uppercase"}}>🎙️ ${lang==="tr"?"Cihazındaki Sesler":"Voices on Your Device"}</div>
-        <div style=${{fontSize:9,color:"var(--sub)",padding:"0 8px 6px",lineHeight:1.4}}>${lang==="tr"?"Yanıtlar tarayıcının sesli okuma motoruyla okunur (DeepSeek TTS sağlamaz). Liste boşsa işletim sisteminden Türkçe ses paketi kur.":"Replies are read by the browser's speech engine (DeepSeek provides no TTS). If the list is empty, install a Turkish voice pack in your OS."}</div>
-        <div style=${{padding:"4px 8px 10px"}}>
-          <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-            <span style=${{fontSize:9,color:"var(--sub)",fontWeight:700}}>${lang==="tr"?"⚡ Konuşma Hızı":"⚡ Speech Speed"}</span>
-            <span style=${{fontSize:10,color:"#d8b4fe",fontWeight:800}}>${voiceSpeed.toFixed(2)}×</span>
-          </div>
-          <input type="range" min="0.5" max="2" step="0.05" value=${voiceSpeed} onInput=${function(e){var v=parseFloat(e.target.value);setVoiceSpeed(v);try{localStorage.setItem("pk_voice_speed",String(v))}catch(err){}}} style=${{width:"100%",accentColor:"#a855f7"}}/>
-          <div style=${{display:"flex",justifyContent:"space-between",fontSize:8,color:"var(--sub)",marginTop:2}}>
-            <span>0.5×</span><span>1×</span><span>2×</span>
-          </div>
-        </div>
-        ${voiceList.length===0
-          ?html`<div style=${{padding:"10px 8px",fontSize:10,color:"var(--sub)"}}>${lang==="tr"?"Ses listesi henüz boş (bazı tarayıcılar sesleri geç yükler).":"Voice list is empty yet (some browsers load voices lazily)."}</div>`
-          :voiceList.map(function(v,i){var hasSel=!!voiceSelectedURI;var act=hasSel?v.voiceURI===voiceSelectedURI:(i===0);return html`<button key=${(v.voiceURI||"v")+i} onClick=${function(){setVoiceSelectedURI(v.voiceURI||"");try{localStorage.setItem("pk_voice_uri",v.voiceURI||"")}catch(e){}}} style=${{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"8px 10px",border:"none",background:act?"rgba(168,85,247,0.18)":"transparent",color:act?"#d8b4fe":"var(--txt)",fontSize:11,textAlign:"left",cursor:"pointer",borderRadius:8}}>
-          <span>${/^tr/i.test(v.lang||"")?"🇹🇷":(/^en/i.test(v.lang||"")?"🇬🇧":"🌐")}</span>
-          <span style=${{flex:1,fontWeight:act?700:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${v.name}</span>
-          <span style=${{fontSize:9,color:"var(--sub)"}}>${v.lang||""}</span>
-          ${act?html`<span style=${{fontSize:12}}>✓</span>`:null}
-        </button>`})}
-      </div>`}
-      <div style=${{flex:1,overflowY:"auto",marginBottom:14,display:"flex",flexDirection:"column",gap:10,minHeight:200,maxHeight:"50vh"}}>
-        ${voiceHistory.length===0&&!voiceTranscript&&!voiceAiText?html`<div style=${{padding:"20px 14px",borderRadius:"var(--radius-sm)",background:"rgba(16,185,129,0.06)",border:"1px dashed rgba(16,185,129,0.28)",textAlign:"center"}}>
-          <p style=${{fontSize:11,color:"var(--sub)",lineHeight:1.6}}>${lang==="tr"?'🎤 Aşağıdaki mikrofona dokun ve Türkçe konuş. M3 cevap verecek. Live mod açıksa konuşma otomatik devam eder.':'🎤 Tap the mic and speak. M3 will respond. With Live mode on, the conversation continues automatically.'}</p>
-        </div>`:null}
-        ${voiceHistory.filter(function(m){return m.role==="assistant"}).map(function(m,i){return html`<div key=${"vh_"+i} style=${{display:"flex",justifyContent:"flex-start"}}>
-          <div style=${{maxWidth:"92%",padding:"10px 14px",borderRadius:"14px 14px 14px 4px",background:"var(--card2)",border:"1px solid var(--border)",color:"var(--txt)",fontSize:12,lineHeight:1.5,whiteSpace:"pre-wrap"}}>${m.content}</div>
-        </div>`})}
-        ${voiceTranscript&&html`<div style=${{display:"flex",justifyContent:"flex-start",alignItems:"center",gap:6,padding:"6px 12px"}}>
-          <div style=${{display:"flex",gap:3}}>
-            <div style=${{width:5,height:5,borderRadius:3,background:"var(--blue2)",animation:"pulse 0.9s infinite"}}/>
-            <div style=${{width:5,height:5,borderRadius:3,background:"var(--blue2)",animation:"pulse 0.9s 0.2s infinite"}}/>
-            <div style=${{width:5,height:5,borderRadius:3,background:"var(--blue2)",animation:"pulse 0.9s 0.4s infinite"}}/>
-          </div>
-          <span style=${{fontSize:10,color:"var(--blue2)",fontWeight:700}}>${lang==="tr"?"dinliyor…":"listening…"}</span>
-        </div>`}
-        ${aiLoading&&html`<div style=${{display:"flex",justifyContent:"flex-start"}}>
-          <div style=${{padding:"9px 14px",borderRadius:"14px 14px 14px 4px",background:"var(--card2)",border:"1px solid var(--border)",display:"flex",alignItems:"center",gap:6}}>
-            <div style=${{width:6,height:6,borderRadius:3,background:"var(--purple)",animation:"pulse 0.9s infinite"}}/>
-            <div style=${{width:6,height:6,borderRadius:3,background:"var(--purple)",animation:"pulse 0.9s 0.2s infinite"}}/>
-            <div style=${{width:6,height:6,borderRadius:3,background:"var(--purple)",animation:"pulse 0.9s 0.4s infinite"}}/>
-          </div>
-        </div>`}
-      </div>
-
-      ${voiceErr&&html`<div style=${{padding:"8px 11px",borderRadius:8,background:"rgba(255,68,102,0.10)",border:"1px solid rgba(255,68,102,0.24)",color:"var(--red)",fontSize:11,marginBottom:8,lineHeight:1.4}}>
-        ${voiceErr}
-      </div>`}
-
-      <div style=${{display:"flex",justifyContent:"center",alignItems:"center",padding:"12px 0",gap:12,position:"relative"}}>
-        <button onClick=${voiceToggle} disabled=${!voiceSupported} style=${{width:72,height:72,borderRadius:36,border:"none",background:voiceListening?"linear-gradient(135deg,#ef4444,#dc2626)":voiceSpeaking?"linear-gradient(135deg,#10b981,#059669)":"linear-gradient(135deg,#10b981,#059669)",color:"#fff",fontSize:30,cursor:voiceSupported?"pointer":"not-allowed",boxShadow:voiceListening?"0 0 0 8px rgba(239,68,68,0.18),0 0 0 16px rgba(239,68,68,0.08)":voiceSpeaking?"0 0 0 8px rgba(16,185,129,0.18)":"0 0 0 8px rgba(16,185,129,0.18),0 0 0 16px rgba(16,185,129,0.06)",transition:"all 0.2s",display:"flex",alignItems:"center",justifyContent:"center",animation:voiceListening?"pulse 1.2s infinite":"none"}}>
-          ${voiceListening?"⏹":voiceSpeaking?"🔊":"🎤"}
-        </button>
-      </div>
-      <p style=${{textAlign:"center",fontSize:10,color:"var(--sub)",marginTop:-4,marginBottom:0}}>
-        ${voiceListening?(lang==="tr"?"Konuş, bitince otomatik gönderilecek":"Speak, auto-sends when done"):voiceSpeaking?(lang==="tr"?"M3 konuşuyor…":"M3 is speaking…"):voiceLive?(lang==="tr"?"Live mod açık — mikrofona dokun":"Live mode on — tap the mic"):(lang==="tr"?"Mikrofona dokun ve konuş":"Tap the mic and speak")}
-      </p>
-      ${!voiceSupported?html`<p style=${{textAlign:"center",fontSize:10,color:"var(--red)",marginTop:6}}>${lang==="tr"?"Tarayıcın sesli girişi desteklemiyor. Chrome veya Edge dene.":"Your browser doesn't support voice input. Try Chrome or Edge."}</p>`:null}
     </div>
   </div>`}
 

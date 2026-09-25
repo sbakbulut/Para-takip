@@ -67,13 +67,6 @@ function polyfill(window, opts) {
   };
   window.URL.createObjectURL = () => "blob:para-kontrol-test";
   window.URL.revokeObjectURL = () => {};
-  window.speechSynthesis = {
-    getVoices: () => [], speak() {}, cancel() {}, pause() {}, resume() {},
-    addEventListener() {}, removeEventListener() {}, speaking: false, pending: false,
-  };
-  window.SpeechSynthesisUtterance = function (t) { this.text = t; };
-  window.SpeechRecognition = undefined;
-  window.webkitSpeechRecognition = undefined;
   window.Notification = function () {};
   window.Notification.permission = "denied";
   window.Notification.requestPermission = () => Promise.resolve("denied");

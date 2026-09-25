@@ -4,7 +4,7 @@
  * yerel tarih/ay yardimcilari ve demo veri ayrimi.
  */
 const { createSuite } = require("./tiny");
-const { boot, waitFor, click } = require("./harness");
+const { boot, waitFor, click, appHtml } = require("./harness");
 
 const s = createSuite("test.js");
 
@@ -226,6 +226,27 @@ function jsonResponse(obj, status = 200) {
 
   /* ---------- 10) Demo veri Drive'a gitmez ---------- */
   s.ok("demo bayragi _demo ile isaretli", w.ld()._demo === true);
+
+  /* ---------- 11) Sesli sohbet kaldirildi (v12.7) ---------- */
+  /* AI paneli ozet sekmesinde render edilir (?tab=ozet) */
+  const wv7 = await boot({ search: "?tab=ozet" });
+  const src7 = appHtml();
+  s.ok("index.html'de 'Sesli Sohbet' metni yok", src7.indexOf("Sesli Sohbet") === -1);
+  s.ok("index.html'de 'Voice Chat' metni yok", src7.indexOf("Voice Chat") === -1);
+  s.ok("Web Speech API kullanimi kalmadi",
+    src7.indexOf("speechSynthesis") === -1 && src7.indexOf("SpeechRecognition") === -1);
+  s.ok("sesli sohbet localStorage anahtari kalmadi (pk_voice_)", src7.indexOf("pk_voice_") === -1);
+  s.ok("sesli sohbet fonksiyonlari kalmadi (voiceClose/voiceToggle)",
+    src7.indexOf("voiceClose") === -1 && src7.indexOf("voiceToggle") === -1);
+  const aiBtns7 = Array.from(wv7.document.querySelectorAll("button"))
+    .map((b) => (b.textContent || "").trim())
+    .filter((tx) => /AI ile Yorumla|AI'ya Sor/.test(tx));
+  s.eq("AI panelinde 2 buton kaldi (sesli sohbet butonu gitti)", aiBtns7.length, 2);
+  const micBtns7 = Array.from(wv7.document.querySelectorAll("button"))
+    .filter((b) => (b.textContent || "").indexOf("\uD83C\uDFA4") !== -1);
+  s.eq("mikrofon (sesli sohbet) butonu DOM'da yok", micBtns7.length, 0);
+  s.ok("arayuzde 'Sesli Sohbet' metni yok", (wv7.document.body.textContent || "").indexOf("Sesli Sohbet") === -1);
+  s.eq("sesli sohbet kaldirildiktan sonra konsol hatasi yok", wv7.__consoleErrors.length, 0);
 
   s.done();
 })().catch((e) => {

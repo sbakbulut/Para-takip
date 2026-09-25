@@ -3,8 +3,41 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v12.6` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
-- **Testler:** `npm ci && npm test` — 293 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+- **Sürüm:** `v12.7` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Testler:** `npm ci && npm test` — 302 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+
+## Sesli sohbet kaldırıldı (v12.7)
+
+**📈 Özet → DeepSeek V4.1 Flash Canlı Yorum** panelindeki **🎤 Sesli Sohbet** özelliği tamamen
+kaldırıldı: panelde artık yalnızca **🪄 AI ile Yorumla** ve **💬 AI'ya Sor** butonları var.
+
+Kaldırılanlar:
+- Sesli sohbet butonu + tam ekran sesli sohbet modalı (Live modu, mikrofon butonu, dinliyor/Konuşuyor durumları)
+- `SpeechRecognition` / `webkitSpeechRecognition` (mikrofon girişi) ve `speechSynthesis` (sesli okuma)
+- Ses seçici (voiceURI listesi, `pk_voice_uri`) ve konuşma hızı ayarı (`pk_voice_speed`)
+- `_voice*` yardımcıları, `voiceModal/voiceLive/voiceListening/voiceSpeaking` state'leri ve ilgili `useEffect`
+- `tests/harness.js` içindeki `speechSynthesis` / `SpeechRecognition` stub'ları (artık gerekmiyor)
+
+**Dokunulmayanlar** (diğer AI fonksiyonları aynen çalışır): `callDeepSeekAI()` ile aylık canlı yorum,
+**AI'ya Sor** sohbet modalı, kaydetmeden önce **💡 Akıl Danışma** ve **🧠 Derin düşünme**; Jev
+(yerel çekirdek + API) kararları ve kategori önerisi.
+
+İlgili test: `tests/test.js` bölüm 11 (9 kontrol) — `index.html` ve render edilen arayüzde sesli sohbet
+izi olmaması (`Sesli Sohbet`/`Voice Chat`, `speechSynthesis`, `SpeechRecognition`, `pk_voice_`,
+`voiceClose`/`voiceToggle`, 🎤 butonu), AI panelinde 2 buton kalması ve konsol hatası olmaması.
+
+### Ölçülen test sonucu (v12.7)
+
+```
+$ npm test
+== test.js:               ALL PASS  98/98
+== test-sync.js:          ALL PASS  64/64
+== test-jev.js:           ALL PASS  104/104
+== test-category-order.js: ALL PASS  34/34
+== test-runner.js:        ALL PASS  2/2
+
+TAMAMI GECTI — 302 kontrol, 0 hata
+```
 
 ## Not alanı klavye açıkken erişilebilir (v12.6)
 
@@ -196,13 +229,13 @@ her seferinde sessizce yerel çekirdeğe düşüyordu (`📡 Test` kırmızı). 
 
 ## v12.0 — Hibrit yapay zekâ: DeepSeek (System 2) + Jev (System 1)
 
-DeepSeek **akıl hocası** olarak kaldı: sohbet, aylık yorum, derin analiz, sesli asistan. Yanına
+DeepSeek **akıl hocası** olarak kaldı: sohbet, aylık yorum, derin analiz. Yanına
 **System One** karar modeli **Jev** eklendi: milisaniyelik kararlar, **tipli** çıktılar
 (`choice` / `noul` / `score` + kalibre güven) ve arka plan otomasyonları.
 
 | | System 2 (DeepSeek V4.1 Flash) | System 1 (Jev) |
 |---|---|---|
-| İş | sohbet, yorum, analiz, sesli asistan | karar, sınıflandırma, tarama |
+| İş | sohbet, yorum, analiz | karar, sınıflandırma, tarama |
 | Çıktı | serbest metin | tipli değer + olasılık + güven |
 | Gecikme | saniyeler | ~0 ms (yerel) / 70-500 ms (API) |
 | Nerede | `callDeepSeekAI()` | `jevAsk()` |
@@ -413,7 +446,7 @@ Eski kurulumda **token URL'de** (`?token=…`) taşınıyor, **Drive'dan gelen v
 - **💳 Borçlar:** kart/kredi takibi, ödeme geçmişi, geri ödeme tahmini
 - **📊 Bütçe:** gelir girişleri, tasarruf hedefi, kategori limitleri, **tekrarlayan harcamalar**, **bütçe profilleri**
 - **📈 Özet:** nakit akışı, kategori dağılımı, günlük trend, aylık karşılaştırma, yıllık özet, borç durumu
-- **AI (DeepSeek):** aylık yorum, serbest soru-cevap, kaydetmeden önce "akıl danış", sesli sohbet
+- **AI (DeepSeek):** aylık yorum, serbest soru-cevap, kaydetmeden önce "akıl danış"
 - **Yedek:** CSV (Excel) dışa aktarma, JSON yedek/dışa-içe aktarma, rapor yazdırma
 - **Senkron:** Google Drive (Apps Script üzerinden), PIN kilidi, bildirimler, TR/EN dil, 15 para birimi
 
@@ -430,7 +463,6 @@ Teknik notlar:
 - Zaman aşımı 30 sn; 401/402/429 için anlaşılır hata mesajları gösterilir.
 - `content` boş dönerse `reasoning_content` kullanılır; `<think>…</think>` blokları temizlenir.
 - Model adı `deepseek-flash` (= DeepSeek-V4.1-Flash). `deepseek-v4-flash` gibi eski adlar kabul edilir ama önerilmez.
-- **Sesli okuma** tarayıcının Web Speech motorunu kullanır (DeepSeek TTS sunmaz). Telefonunda Türkçe ses paketi yoksa ses listesi boş görünebilir.
 
 ## Google Drive senkronizasyonu
 
@@ -457,7 +489,7 @@ Sunucu hata kodları: `unauthorized`, `server_token_missing`, `method_not_allowe
 - PIN yalnızca arayüzü kilitler; veriyi şifrelemez. Cihazı paylaşıyorsan tarayıcı profilini ayrı tut.
 - AI anahtarı istersen yalnızca oturum belleğinde tutulabilir (önerilir).
 - Drive token'ı **hiçbir zaman URL'de taşınmaz** (ne istemcide ne sunucuda kabul edilir).
-- `localStorage` anahtarları: `para_kontrol_demo_v2` (veri), `pk_lang`, `pk_theme`, `pk_cur`, `pk_pin`, `pk_pin_lock`, `pk_notif`, `pk_ai_key`, `pk_ai_key_mode`, `pk_ai_think`, `pk_drive_url`, `pk_drive_token`, `pk_drive_snapshot`, `pk_voice_uri`, `pk_voice_speed`, `pk_jev_key`, `pk_jev_key_mode`, `pk_jev_mode`, `pk_jev_transport`, `pk_jev_provider`, `pk_jev_cache`.
+- `localStorage` anahtarları: `para_kontrol_demo_v2` (veri), `pk_lang`, `pk_theme`, `pk_cur`, `pk_pin`, `pk_pin_lock`, `pk_notif`, `pk_ai_key`, `pk_ai_key_mode`, `pk_ai_think`, `pk_drive_url`, `pk_drive_token`, `pk_drive_snapshot`, `pk_jev_key`, `pk_jev_key_mode`, `pk_jev_mode`, `pk_jev_transport`, `pk_jev_provider`, `pk_jev_cache`.
 
 ## Demo veriler
 
@@ -487,12 +519,13 @@ React/ReactDOM/htm `node_modules` içindeki yerel UMD kopyalarından gömülür,
 
 ```bash
 npm ci          # yalnizca jsdom + React/htm (devDependencies)
-npm test        # 5 dosya, 293 kontrol
+npm test        # 5 dosya, 302 kontrol
 ```
 
 | Dosya | Ne sınar |
 |---|---|
-| `tests/test.js` (89) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
+| `tests/test.js` (98) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, sesli sohbet kaldırıldı denetimleri (`index.html`/arayüzde `speechSynthesis`,
+`SpeechRecognition`, `Sesli Sohbet`, `pk_voice_` ve 🎤 butonu yok; AI panelinde 2 buton kalır), PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
 | `tests/test-sync.js` (64) | **`gas/Code.gs` gerçekten çalıştırılır** (vm + `PropertiesService`/`ContentService`/`UrlFetchApp` taklidi): `doGet` her zaman `method_not_allowed`, `setToken` min 16 karakter, token doğrulama (`server_token_missing`/`unauthorized`), `put`/`get` turu ve rev, `bad_json`/`bad_action`/`bad_data`/`too_large`, dakikada 60 istek limiti, Jev proxy'sinde **SSRF kapalı beyaz liste** (istemcinin `url`/`endpoint` alanı yok sayılır), `bad_model` desen denetimi, üst akış hata eşlemesi (401/402/429/500/unreachable). İstemci tarafı: `drivePost` POST+`no-store`+token **gövdede** (URL'de asla), `_driveEnabled` koşulu |
 | `tests/test-jev.js` (104) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı), anlık analiz kartının yeri (tutar alanının hemen altı — klavye bölgesi), kategori önerisi kartının yeri (not alanının hemen üstü) ve önerinin forma uygulanması, not alanının konumu (tutar alanının hemen altı — klavye bölgesi) ve tutar+not ile eklemenin kaydedilmesi |
 | `tests/test-category-order.js` (34) | kategorileri **elle sıralama**: düzenleme modunda ▲/▼ okları ve ipucu metni, uç kısıtları (ilk ▲ / son ▼ devre dışı), yukarı-aşağı taşımanın listeyi değiştirmesi, harcama kategori seçicisi + arama filtresinin yeni sırayı kullanması, kasa (AES-GCM) zarfına yazım ve yenileme sonrası kalıcılık, demo verinin diske yazılmaması, İngilizce etiketler |
