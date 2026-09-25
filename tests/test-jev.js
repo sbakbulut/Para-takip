@@ -359,6 +359,31 @@ const VALID = { model: "typesafe/jev-1.13", answers: { q: { type: "choice", choi
     s.eq("kategori onerisi sirasinda konsol hatasi yok", wS.__consoleErrors.length, 0);
   }
 
+  /* ---------- 16) Not alani klavye bolgesinde: tutar alaninin hemen altinda ---------- */
+  {
+    const wN = await boot();
+    const doc = wN.document;
+    const inputs = Array.from(doc.querySelectorAll("input"));
+    const noteInput = inputs.find((i) => (i.getAttribute("placeholder") || "").indexOf("Not ekle") === 0);
+    const amtInput = inputs.find((i) => (i.getAttribute("inputmode") || "") === "decimal");
+    const POS = wN.Node.DOCUMENT_POSITION_FOLLOWING;
+    const catHead = Array.from(doc.querySelectorAll("span")).find((x) => /^kategori$/i.test((x.textContent || "").trim()));
+    const firstCat = doc.querySelector(".cat-pill");
+    s.ok("not alani tutar alanindan SONRA", !!(amtInput.compareDocumentPosition(noteInput) & POS));
+    s.ok("not alani KATEGORI basligindan ONCE (klavye bolgesi)", !!(noteInput.compareDocumentPosition(catHead) & POS));
+    s.ok("not alani kategori izgarasindan ONCE", !!(noteInput.compareDocumentPosition(firstCat) & POS));
+    const setValN = Object.getOwnPropertyDescriptor(wN.HTMLInputElement.prototype, "value").set;
+    setValN.call(amtInput, "100");
+    amtInput.dispatchEvent(new wN.Event("input", { bubbles: true }));
+    setValN.call(noteInput, "Kahve testi");
+    noteInput.dispatchEvent(new wN.Event("input", { bubbles: true }));
+    await waitFor(() => (amtInput.value || "") === "100", 3000, wN);
+    click(wN, doc.querySelector(".btn-primary"));
+    await waitFor(() => (doc.body.textContent || "").indexOf("Kahve testi") !== -1, 5000, wN);
+    s.ok("not, harcamayla birlikte kaydedilir", true);
+    s.eq("not alani akisinda konsol hatasi yok", wN.__consoleErrors.length, 0);
+  }
+
   s.done();
 })().catch((e) => {
   console.error("BEKLENMEYEN HATA:", (e && e.stack) || e);

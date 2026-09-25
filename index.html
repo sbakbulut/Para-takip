@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v12.5</title>
+<title>Para Kontrol v12.6</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="12.5";
+var APP_VERSION="12.6";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -5216,6 +5216,13 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     <!-- Jev anlik analizi: tutar alaninin hemen altinda — klavye acikken de gorunur -->
     ${jevGateUi()}
 
+    <!-- Jev kategori onerisi: not alaninin HEMEN USTUNDE (klavye bolgesi) -->
+    ${jevSuggestUi()}
+
+    <!-- NOT ALANI — tutar alaninin hemen altinda: klavye acikken de erisilebilir kalir -->
+    <input class="inp-field" type="text" placeholder=${t("add_note")} value=${note} onInput=${function(e){setNote(e.target.value)}} onKeyDown=${quickSaveKey} style=${{marginBottom:10}}/>
+    ${jevFillMsg&&html`<div style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(6,255,165,0.08)",border:"1px solid rgba(6,255,165,0.25)",fontSize:10,color:"var(--green)",fontWeight:700}}>${jevFillMsg}</div>`}
+
     <!-- Category select -->
     <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
       <span style=${{fontSize:11,color:"var(--sub)",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase"}}>${t("category")}</span>
@@ -5264,10 +5271,6 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       </div>`}
     </div>`}
 
-    <!-- Jev kategori onerisi: not alaninin HEMEN USTUNDE — klavye acikken de gorunur -->
-    ${jevSuggestUi()}
-    <input class="inp-field" type="text" placeholder=${t("add_note")} value=${note} onInput=${function(e){setNote(e.target.value)}} onKeyDown=${quickSaveKey} style=${{marginBottom:10}}/>
-    ${jevFillMsg&&html`<div style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(6,255,165,0.08)",border:"1px solid rgba(6,255,165,0.25)",fontSize:10,color:"var(--green)",fontWeight:700}}>${jevFillMsg}</div>`}
     <button class=${"btn-primary"+(ok?" ok":"")} onClick=${addExp}>
       ${ok?t("added"):fc(cat).icon+" "+(dt===tdy()?t("add_expense"):edp.d+" "+MN[edp.m]+t("add_to_date"))}
     </button>
