@@ -3,8 +3,37 @@
 Kişisel harcama / gelir / borç takip uygulaması. **Tek dosya** (`index.html`), kurulum gerekmez, veriler yalnızca tarayıcıda (`localStorage`) durur.
 
 - **Canlı:** https://sbakbulut.github.io/Para-takip/
-- **Sürüm:** `v12.3` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
-- **Testler:** `npm ci && npm test` — 274 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+- **Sürüm:** `v12.4` (sürüm numarası tek yerde: `index.html` içindeki `APP_VERSION` sabiti)
+- **Testler:** `npm ci && npm test` — 282 kontrol, jsdom, ağ erişimi gerekmez (bkz. [Testler](#testler))
+
+## Anlık analiz artık tutar alanının hemen altında (v12.4)
+
+**✏️ Harcama** ekranında tutar yazarken Jev'in anlık risk analizi, tutar alanının **hemen altında**
+kompakt bir şerit olarak görünür. Eski kart formun altında (not alanının altında) durduğu için klavye
+açıldığında ekran dışında kalıyordu; şerit artık harcama girerken her zaman görünür:
+
+- **Sol rozet + risk başlığı**: `BUTCENI ASIYOR` (kırmızı) · `BUTCEYI ZORLUYOR` (amber) · `BUTCE ICINDE` (yeşil)
+- **Sağ rozet**: kararın kaynağı (`yerel kural` / `jev`) ve varsa kalibre güven yüzdesi (örn. `jev 82%`)
+- **Bütçe çubuğu** (bütçe tanımlıysa): bu harcamadan sonraki durum — `9.670 ₺ / 7.000 ₺` · `%138`
+- **En fazla iki sebep satırı**: bütçe aşımı, ay sonu projeksiyonu, tekrarlayan ödeme, zorunlu olmayan harcama
+- Karar hâlâ **tamamen yerel** ve render içinde hesaplanır (`jevRiskGateSync`): tıklama/ağ beklemesi yok,
+  DeepSeek'in cevabı beklenmez. Analiz yalnızca tutar girildiğinde gösterilir; sessiz durumda gürültü yapmaz.
+
+İlgili test: `tests/test-jev.js` bölüm 14 (8 kontrol) — kartın tutar girilince görünmesi, tutar alanından
+sonra / kategori başlığından ve not alanından önce gelmesi, başlık ve kaynak rozetleri, konsol hatası olmaması.
+
+### Ölçülen test sonucu (v12.4)
+
+```
+$ npm test
+== test.js:               ALL PASS  89/89
+== test-sync.js:          ALL PASS  64/64
+== test-jev.js:           ALL PASS  93/93
+== test-category-order.js: ALL PASS  34/34
+== test-runner.js:        ALL PASS  2/2
+
+TAMAMI GECTI — 282 kontrol, 0 hata
+```
 
 ## Güvenlik sertleştirmesi (v12.3)
 
@@ -51,7 +80,7 @@ Bu sürüm **uygulama davranışını değiştirmez**; deponun doğrulanabilirli
 |---|---|---|
 | 1 | `tests/` — gerçekten çalışan testler (`test.js`, `test-sync.js`, `test-jev.js`, `run.js`, `harness.js`) | v12.1'e kadar README testlerden bahsediyordu ama **dosyalar depoda yoktu**; `/tmp/smoke` gibi yerel bir klasöre işaret ediyordu, yani kimse doğrulayamıyordu |
 | 2 | `gas/Code.gs` testleri **gerçekten çalıştırır** (vm + Apps Script taklidi) | Proxy'nin güvenlik iddiaları (POST-only, token yalnızca gövdede, SSRF kapalı beyaz liste, hız/boyut limiti) artık kanıtlanıyor |
-| 3 | `.github/workflows/ci.yml` | Her push/PR'da sürüm+`<title>` uyumu, `node --check` ve tüm test paketi koşar (güncel: 274 kontrol; Pages doğrudan `main`'den yayınlandığı için tek kapı buydu) |
+| 3 | `.github/workflows/ci.yml` | Her push/PR'da sürüm+`<title>` uyumu, `node --check` ve tüm test paketi koşar (güncel: 282 kontrol; Pages doğrudan `main`'den yayınlandığı için tek kapı buydu) |
 | 4 | `package.json` + `package-lock.json` | Testler `jsdom` ile; React/ReactDOM/htm **yerel** kopyalardan gömülür — testler CDN'e çıkmaz, çevrimdışı deterministiktir |
 | 5 | `LICENSE` (MIT) | Depo public'ti ve lisansı yoktu (= kullanım izni belirsiz) |
 | 6 | README düzeltmeleri | Aşağıdaki "Düzeltilen yanlış iddialar" bölümü |
@@ -167,6 +196,8 @@ Kullanıcı tutarı yazdığı **anda** (Ekle'ye basmadan) hesaplanır — `um()
 ```js
 var gate = jevRiskGateSync(input, lang);   // {isAllowed, riskLevel, deficitAmount, confidence, source, reasons[]}
 ```
+
+Kart, **tutar alanının hemen altında** gösterilir (v12.4): klavye açıkken de ekranda kalır.
 
 - `riskLevel`: `safe` | `watch` | `strain` | `breach`
 - `deficitAmount`: **koddan** = `max(0, spent + amount − budget)`
@@ -400,14 +431,14 @@ React/ReactDOM/htm `node_modules` içindeki yerel UMD kopyalarından gömülür,
 
 ```bash
 npm ci          # yalnizca jsdom + React/htm (devDependencies)
-npm test        # 5 dosya, 274 kontrol
+npm test        # 5 dosya, 282 kontrol
 ```
 
 | Dosya | Ne sınar |
 |---|---|
-| `tests/test.js` (85) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
-| `tests/test-sync.js` (53) | **`gas/Code.gs` gerçekten çalıştırılır** (vm + `PropertiesService`/`ContentService`/`UrlFetchApp` taklidi): `doGet` her zaman `method_not_allowed`, `setToken` min 16 karakter, token doğrulama (`server_token_missing`/`unauthorized`), `put`/`get` turu ve rev, `bad_json`/`bad_action`/`bad_data`/`too_large`, dakikada 60 istek limiti, Jev proxy'sinde **SSRF kapalı beyaz liste** (istemcinin `url`/`endpoint` alanı yok sayılır), `bad_model` desen denetimi, üst akış hata eşlemesi (401/402/429/500/unreachable). İstemci tarafı: `drivePost` POST+`no-store`+token **gövdede** (URL'de asla), `_driveEnabled` koşulu |
-| `tests/test-jev.js` (85) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı) |
+| `tests/test.js` (89) | render, `?tab=` ve sekme geçişleri, `parseNum`/`fmt` (TR/EN ayırıcı), yerel tarih/ay yardımcıları (`tdy`/`mkk`/`dueDateForMonth`), demo veri ayrımı, PIN (tuzlu SHA-256, düz metin sızmaması, 5 deneme → 30 sn kilit, eski düz PIN uyumu), DeepSeek istek gövdesi (thinking on/off, `reasoning_effort`, `<think>` temizliği, `reasoning_content` geri dönüşü, 401/402/429 mesajları), `sanitizeRemote` (CSS injection, tip/tarih/tutar doğrulama, `DRIVE_MAX` limitleri, kontrol karakteri temizliği), `remoteSuspicious` |
+| `tests/test-sync.js` (64) | **`gas/Code.gs` gerçekten çalıştırılır** (vm + `PropertiesService`/`ContentService`/`UrlFetchApp` taklidi): `doGet` her zaman `method_not_allowed`, `setToken` min 16 karakter, token doğrulama (`server_token_missing`/`unauthorized`), `put`/`get` turu ve rev, `bad_json`/`bad_action`/`bad_data`/`too_large`, dakikada 60 istek limiti, Jev proxy'sinde **SSRF kapalı beyaz liste** (istemcinin `url`/`endpoint` alanı yok sayılır), `bad_model` desen denetimi, üst akış hata eşlemesi (401/402/429/500/unreachable). İstemci tarafı: `drivePost` POST+`no-store`+token **gövdede** (URL'de asla), `_driveEnabled` koşulu |
+| `tests/test-jev.js` (93) | yerel çekirdek self-testi (63 kontrol), OpenRouter ucu `/api/alpha/decisions` + `chat/completions` **içermez**, başlıklar (`Authorization`, `HTTP-Referer`, `X-OpenRouter-Title`), TypeSafe sağlayıcısı, **model yedek zinciri** (400 "does not exist" → otomatik geçiş + çalışan slug'ın hatırlanması + tüm adaylar ölüyse açık hata), elle model override, tipli cevap doğrulama (küme dışı seçim / aralık dışı olasılık reddi), hata yollarında **throw etmeme** (ağ hatası, bozuk JSON, zaman aşımı, 401/402), Apps Script proxy taşıması, anahtar maskeleme, `📡 Test` teşhis akışı ve `?testjev=1` paneli, Jev ayarlar arayüzü (harcama limiti uyarısı), anlık analiz kartının yeri (tutar alanının hemen altı — klavye bölgesi) |
 | `tests/test-category-order.js` (34) | kategorileri **elle sıralama**: düzenleme modunda ▲/▼ okları ve ipucu metni, uç kısıtları (ilk ▲ / son ▼ devre dışı), yukarı-aşağı taşımanın listeyi değiştirmesi, harcama kategori seçicisi + arama filtresinin yeni sırayı kullanması, kasa (AES-GCM) zarfına yazım ve yenileme sonrası kalıcılık, demo verinin diske yazılmaması, İngilizce etiketler |
 | `tests/test-runner.js` (2) | test runner'ın alt süreç başlatma hatalarını ve özet ayrıştırmasını doğrular |
 

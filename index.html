@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Para Kontrol">
-<title>Para Kontrol v12.3</title>
+<title>Para Kontrol v12.4</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -267,7 +267,7 @@ var h=React.useState,ef=React.useEffect,um=React.useMemo,ur=React.useRef;
 /* ============================================================
    SURUM
    ============================================================ */
-var APP_VERSION="12.3";
+var APP_VERSION="12.4";
 
 /* ============================================================
    DeepSeek V4.1 Flash AI ENTEGRASYONU
@@ -4514,28 +4514,44 @@ function App(){
     return out.slice(0,3);
   }
 
-  /* MODUL 1 — ANLIK RISK KAPISI. Render icinde uretilir; DeepSeek beklenmez. */
+  /* MODUL 1 — ANLIK RISK KAPISI.
+     Tutar alaninin HEMEN ALTINDA uretilir: klavye acilinca da ekranda kalir.
+     Render icinde hesaplanir; DeepSeek/Jev API beklemesi YOK. */
   function jevGateUi(){
     var v=jevGateVerdict;
     if(!v)return null;
+    var TR=(lang==="tr");
     var isBad=(v.riskLevel==="breach");
     var isWarn=(v.riskLevel==="strain"||v.riskLevel==="watch");
     /* "safe" ve sebep yoksa gurultu yapma */
     if(!isBad&&!isWarn&&(v.reasons||[]).length===0)return null;
     var lines=jevReasonLines(v,lang);
     var col=isBad?"var(--red)":(isWarn?"var(--amber)":"var(--green)");
-    var ttl=isBad?(lang==="tr"?"BUTCENI ASIYOR":"OVER BUDGET")
-            :(isWarn?(lang==="tr"?"BUTCEYI ZORLUYOR":"STRAINING THE BUDGET")
-            :(lang==="tr"?"BUTCE ICINDE":"WITHIN BUDGET"));
-    var srcTag=(v.source==="code")?(lang==="tr"?"yerel kural":"local rule"):"jev";
-    return html`<div style=${{padding:"11px 13px",borderRadius:"var(--radius-sm)",marginBottom:10,background:isBad?"rgba(255,68,102,0.10)":(isWarn?"rgba(245,158,11,0.10)":"rgba(6,255,165,0.06)"),border:"1px solid "+(isBad?"rgba(255,68,102,0.3)":(isWarn?"rgba(245,158,11,0.28)":"rgba(6,255,165,0.22)"))}}>
-      <div style=${{display:"flex",alignItems:"center",gap:7,marginBottom:lines.length?5:0}}>
-        <span style=${{fontSize:14}}>${isBad?"⛔":(isWarn?"⚠️":"✓")}</span>
-        <span style=${{flex:1,fontSize:11,fontWeight:800,color:col,letterSpacing:"0.02em"}}>${ttl}</span>
-        <span style=${{fontSize:8,fontWeight:700,color:"var(--dim)",fontFamily:"var(--mono)",border:"1px solid var(--border)",borderRadius:999,padding:"2px 6px"}}>${srcTag+(v.confidence>0?(" "+Math.round(v.confidence*100)+"%"):"")}</span>
+    var ttl=isBad?(TR?"BUTCENI ASIYOR":"OVER BUDGET")
+            :(isWarn?(TR?"BUTCEYI ZORLUYOR":"STRAINING THE BUDGET")
+            :(TR?"BUTCE ICINDE":"WITHIN BUDGET"));
+    var srcTag=(v.source==="code")?(TR?"yerel kural":"local rule"):"jev";
+    var ratio=Math.max(0,Math.min(1,(v.budgetUsedRatio||0)));
+    var barCol=isBad?"linear-gradient(90deg,#ff4466,#ff8da1)":(isWarn?"linear-gradient(90deg,#f59e0b,#fbbf24)":"linear-gradient(90deg,#06ffa5,#00d084)");
+    return html`<div style=${{padding:"10px 12px",borderRadius:"var(--radius-sm)",marginBottom:14,background:isBad?"rgba(255,68,102,0.10)":(isWarn?"rgba(245,158,11,0.10)":"rgba(6,255,165,0.06)"),border:"1px solid "+(isBad?"rgba(255,68,102,0.3)":(isWarn?"rgba(245,158,11,0.28)":"rgba(6,255,165,0.22)"))}}>
+      <div style=${{display:"flex",alignItems:"center",gap:8}}>
+        <span style=${{width:24,height:24,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0,background:isBad?"rgba(255,68,102,0.14)":(isWarn?"rgba(245,158,11,0.14)":"rgba(6,255,165,0.10)")}}>${isBad?"⛔":(isWarn?"⚠️":"✓")}</span>
+        <div style=${{flex:1,minWidth:0}}>
+          <div style=${{fontSize:8,fontWeight:800,color:"var(--dim)",letterSpacing:"0.1em",textTransform:"uppercase"}}>${"⚡ "+(TR?"Jev anlik analiz":"Jev live analysis")}</div>
+          <div style=${{fontSize:11,fontWeight:800,color:col,letterSpacing:"0.02em",marginTop:2}}>${ttl}</div>
+        </div>
+        <span style=${{fontSize:8,fontWeight:700,color:"var(--dim)",fontFamily:"var(--mono)",border:"1px solid var(--border)",borderRadius:999,padding:"2px 6px",flexShrink:0}}>${srcTag+(v.confidence>0?(" "+Math.round(v.confidence*100)+"%"):"")}</span>
       </div>
-      ${lines.length>0&&html`<div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.6}}>${lines.map(function(txt,i){return html`<div key=${"jgr"+i}>• ${txt}</div>`})}</div>`}
-      ${isBad&&html`<div style=${{fontSize:10,color:"var(--dim)",marginTop:6,lineHeight:1.5}}>${lang==="tr"?"Yine de ekleyebilirsin — bu yalnizca bir uyari.":"You can still add it — this is only a warning."}</div>`}
+      ${v.budget>0&&html`<div style=${{marginTop:8}}>
+        <div style=${{height:5,borderRadius:3,background:"rgba(255,255,255,0.07)",overflow:"hidden"}}>
+          <div style=${{height:"100%",width:(ratio*100).toFixed(1)+"%",borderRadius:3,background:barCol,transition:"width 0.35s ease"}}/>
+        </div>
+        <div style=${{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:9,color:"var(--dim)",fontFamily:"var(--mono)",fontWeight:700}}>
+          <span>${f(v.spentAfter)+" / "+f(v.budget)}</span><span>${"%"+(Math.round((v.budgetUsedRatio||0)*100))}</span>
+        </div>
+      </div>`}
+      ${lines.length>0&&html`<div style=${{fontSize:10,color:"var(--sub)",lineHeight:1.55,marginTop:7}}>${lines.slice(0,2).map(function(txt,i){return html`<div key=${"jgr"+i}>• ${txt}</div>`})}</div>`}
+      ${isBad&&html`<div style=${{fontSize:9,color:"var(--dim)",marginTop:5,lineHeight:1.4}}>${TR?"Yine de ekleyebilirsin — bu yalnizca bir uyari.":"You can still add it — this is only a warning."}</div>`}
     </div>`;
   }
 
@@ -5191,6 +5207,9 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
       <span style=${{fontSize:28,color:"var(--sub)",fontWeight:700,fontFamily:"var(--mono)"}}>${cur.sym}</span>
     </div>
 
+    <!-- Jev anlik analizi: tutar alaninin hemen altinda — klavye acikken de gorunur -->
+    ${jevGateUi()}
+
     <!-- Category select -->
     <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
       <span style=${{fontSize:11,color:"var(--sub)",fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase"}}>${t("category")}</span>
@@ -5242,7 +5261,6 @@ var copy=Object.assign({},exp,{id:Date.now(),date:dt,time:dt===tdy()?new Date().
     <input class="inp-field" type="text" placeholder=${t("add_note")} value=${note} onInput=${function(e){setNote(e.target.value)}} onKeyDown=${quickSaveKey} style=${{marginBottom:10}}/>
     ${jevFillMsg&&html`<div style=${{padding:"7px 11px",borderRadius:"var(--radius-xs)",marginBottom:10,background:"rgba(6,255,165,0.08)",border:"1px solid rgba(6,255,165,0.25)",fontSize:10,color:"var(--green)",fontWeight:700}}>${jevFillMsg}</div>`}
     ${jevSuggestUi()}
-    ${jevGateUi()}
     <button class=${"btn-primary"+(ok?" ok":"")} onClick=${addExp}>
       ${ok?t("added"):fc(cat).icon+" "+(dt===tdy()?t("add_expense"):edp.d+" "+MN[edp.m]+t("add_to_date"))}
     </button>

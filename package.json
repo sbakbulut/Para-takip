@@ -1,6 +1,6 @@
 {
   "name": "para-takip",
-  "version": "12.3.0",
+  "version": "12.4.0",
   "private": true,
   "description": "Para Kontrol - kisisel harcama/gelir/borc takip uygulamasi (tek dosya, sunucusuz)",
   "scripts": {

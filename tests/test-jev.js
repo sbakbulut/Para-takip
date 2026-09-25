@@ -304,6 +304,34 @@ const VALID = { model: "typesafe/jev-1.13", answers: { q: { type: "choice", choi
     s.ok("anahtar alani mevcut (sifre tipi)", !!wU.document.querySelector('input[type="password"]'));
   }
 
+  /* ---------- 14) Anlik analiz karti: tutar alaninin hemen altinda ---------- */
+  {
+    const wG = await boot();
+    const doc = wG.document;
+    const inputs = Array.from(doc.querySelectorAll("input"));
+    const amtInput = inputs.find((i) => (i.getAttribute("inputmode") || "") === "decimal");
+    s.ok("tutar alani bulundu", !!amtInput);
+    const setVal = Object.getOwnPropertyDescriptor(wG.HTMLInputElement.prototype, "value").set;
+    setVal.call(amtInput, "7500");
+    amtInput.dispatchEvent(new wG.Event("input", { bubbles: true }));
+    await waitFor(() => Array.from(doc.querySelectorAll("div"))
+      .some((d) => (d.textContent || "").trim() === "⚡ Jev anlik analiz"), 5000, wG);
+    const eyebrow = Array.from(doc.querySelectorAll("div"))
+      .find((d) => (d.textContent || "").trim() === "⚡ Jev anlik analiz");
+    const card = eyebrow && eyebrow.parentElement.parentElement.parentElement;
+    s.ok("tutar girilince anlik analiz karti gorunur", !!card);
+    const catHead = Array.from(doc.querySelectorAll("span")).find((x) => /^kategori$/i.test((x.textContent || "").trim()));
+    const noteInput = inputs.find((i) => (i.getAttribute("placeholder") || "").indexOf("Not ekle") === 0);
+    const POS = wG.Node.DOCUMENT_POSITION_FOLLOWING;
+    s.ok("kart tutar alanindan SONRA", !!(amtInput.compareDocumentPosition(card) & POS));
+    s.ok("kart KATEGORI basligindan ONCE (klavye bolgesinde)", !!(card.compareDocumentPosition(catHead) & POS));
+    s.ok("kart not alanindan ONCE", !!(card.compareDocumentPosition(noteInput) & POS));
+    const txt = (card.textContent || "").trim();
+    s.ok("risk basligi sinifli", /(BUTCENI ASIYOR|BUTCEYI ZORLUYOR|BUTCE ICINDE)/.test(txt), txt);
+    s.ok("kaynak/guven rozeti var", /(yerel kural|jev)/.test(txt), txt);
+    s.eq("anlik analiz sirasinda konsol hatasi yok", wG.__consoleErrors.length, 0);
+  }
+
   s.done();
 })().catch((e) => {
   console.error("BEKLENMEYEN HATA:", (e && e.stack) || e);
